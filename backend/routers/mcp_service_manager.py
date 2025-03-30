@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict
-from models.service_model import Service, ServiceModel
+from models.service_model import McpService, McpServiceModel
 from utils.db import DatabaseManager
 
 router = APIRouter(prefix="/api/mcp_service_manager", tags=["MCP Services"])
@@ -10,31 +10,32 @@ def get_db_manager():
     # 示例使用SQLite内存数据库
     return DatabaseManager()
 
-def get_service_model(db_manager: DatabaseManager = Depends(get_db_manager)):
-    return ServiceModel(db_manager)
+def get_mcp_service_model(db_manager: DatabaseManager = Depends(get_db_manager)):
+    return McpServiceModel(db_manager)
 
 @router.post("/register")
-async def register_service(service_info: dict, service_model: ServiceModel = Depends(get_service_model)):
+
+
+async def register_mcp_service(mcp_service_info: dict, mcp_service_info: McpServiceModel = Depends(get_mcp_service_model)):
     """
     注册MCP服务
     """
-    service_name = service_info.get("name")
-    if not service_name:
+    mcp_service_name = mcp_service_info.get("name")
+    if not mcp_service_name:
         raise HTTPException(status_code=400, detail="Service name is required")
-    
-    service = Service(
+    mcp_service = McpService(
         name=service_name,
-        description=service_info.get("description"),
-        endpoint=service_info.get("endpoint", "")
+        description=mcp_service_info.get("description"),
+        endpoint=mcp_service_info.get("endpoint", "")
     )
     
-    service_model.register_service(service)
-    return {"message": f"Service {service_name} registered successfully"}
+    mcp_service_model.register_service(mcp_service)
+    return {"message": f"Service {mcp_service_name} registered successfully"}
 
 @router.get("/list")
-async def list_services(service_model: ServiceModel = Depends(get_service_model)):
+async def list_services(mcp_service_model: McpServiceModel = Depends(get_mcp_service_model)):
     """
     获取所有已注册服务
     """
-    services = service_model.list_services()
-    return {"services": services}
+    mcp_services = mcp_service_model.list_services()
+    return {"services": mcp_services}
