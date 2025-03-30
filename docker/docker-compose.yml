@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  mcpgateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "10000:8000"
+    volumes:
+      - ../backend:/app/backend
+      - ../frontend:/app/frontend
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
