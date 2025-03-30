@@ -15,6 +15,7 @@
 import { ref, onMounted } from 'vue'
 import axios from 'axios'
 import ServiceCard from './components/ServiceCard.vue'
+import { API_CONFIG } from './config'
 
 export default {
   components: { ServiceCard },
@@ -23,7 +24,7 @@ export default {
 
     const fetchServices = async () => {
       try {
-        const response = await axios.get('/api/services/list')
+        const response = await axios.get(`${API_CONFIG.baseUrl}/api/mcp_service_manager/list`)
         services.value = response.data.services
       } catch (error) {
         console.error('Error fetching services:', error)

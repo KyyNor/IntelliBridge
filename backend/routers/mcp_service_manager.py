@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/mcp_service_manager", tags=["MCP Services"])
 def get_db_manager():
     # 这里可以根据需要配置SQLite或MySQL
     # 示例使用SQLite内存数据库
-    return DatabaseManager(db_type='sqlite')
+    return DatabaseManager()
 
 def get_service_model(db_manager: DatabaseManager = Depends(get_db_manager)):
     return ServiceModel(db_manager)

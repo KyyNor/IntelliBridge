@@ -5,6 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.declarative import declarative_base
 from fastapi import HTTPException
 from utils.config_manager import ConfigManager
+from pathlib import Path
 
 Base = declarative_base()
 
