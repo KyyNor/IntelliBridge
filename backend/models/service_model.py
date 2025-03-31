@@ -13,6 +13,10 @@ class ServiceStatus(str, Enum):
     ACTIVE = 'active'
     MAINTENANCE = 'maintenance'
 
+class CreationType(str, Enum):
+    MANUAL = 'manual'
+    AUTO = 'auto'
+
 
 class McpService(Base):
     __tablename__ = 'ib_mcp_service_info'
@@ -22,9 +26,12 @@ class McpService(Base):
     endpoint = Column(String(255), nullable=False)
     ip = Column(String(50))
     port = Column(Integer)
-    created_tm = Column(DateTime, default=datetime.datetime.utcnow)
-    updated_tm = Column(DateTime, onupdate=datetime.datetime.utcnow)
+    version = Column(String(50))
+    created_tm = Column(DateTime, default=datetime.datetime.now(datetime.UTC))
+    updated_tm = Column(DateTime, onupdate=datetime.datetime.now(datetime.UTC))
     status = Column(String(20), default=ServiceStatus.OFFLINE)
+    status_check_tm = Column(DateTime)
+    creation_type = Column(String(20), default=CreationType.MANUAL)
 
 
 
@@ -32,6 +39,13 @@ class McpServiceModel:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
         Base.metadata.create_all(bind=self.db.engine)
+
+    def get_service_by_id(self, service_id: int) -> Optional[McpService]:
+        session = self.db.connect()
+        try:
+            return session.query(McpService).get(service_id)
+        finally:
+            session.close()
 
     def register_mcp_service(self, mcp_service: McpService):
         session = self.db.connect()

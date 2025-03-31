@@ -2,7 +2,7 @@
   <div>
     <h1>MCP Gateway Dashboard</h1>
     <Button label="添加服务" icon="pi pi-plus" @click="showModal = true" />
-    <Dialog v-model:visible="showModal" modal header="注册新服务" :style="{ width: '50vw' }">
+    <Dialog v-model="showModal" modal header="注册新服务" :style="{ width: '50vw' }">
       <form @submit.prevent="registerService">
         <div class="p-fluid">
           <div class="p-field">
@@ -24,6 +24,10 @@
           <div class="p-field">
             <label for="port">端口号</label>
             <InputNumber id="port" v-model="newService.port" />
+          </div>
+          <div class="p-field">
+            <label for="version">版本</label>
+            <InputText id="version" v-model="newService.version" />
           </div>
           <Button type="submit" label="注册服务" class="p-mt-3" />
         </div>
@@ -60,7 +64,8 @@ export default {
       description: '',
       endpoint: '',
       ip: '',
-      port: null
+      port: null,
+      version: ''
     })
     const showModal = ref(false)
 
@@ -81,7 +86,8 @@ export default {
           description: '',
           endpoint: '',
           ip: '',
-          port: null
+          port: null,
+          version: ''
         }
         showModal.value = false
         fetchServices()
@@ -105,5 +111,8 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.p-field {
+  margin-bottom: 1rem;
 }
 </style>
