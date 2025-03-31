@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 import httpx
 from typing import Dict
-from backend.models.mcp_service_model import McpServiceModel, ServiceStatus
+from models.mcp_service_model import McpServiceModel, ServiceStatus
 from utils.db import DatabaseManager
 import asyncio
 from contextlib import asynccontextmanager

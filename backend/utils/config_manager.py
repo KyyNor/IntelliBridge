@@ -9,7 +9,7 @@ class ConfigManager:
         self._config = self._load_config()
     
     def _load_config(self) -> Dict[str, Any]:
-        with open(self.config_path) as f:
+        with open(self.config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     
     @property
