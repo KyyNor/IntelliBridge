@@ -1,0 +1,16 @@
+你是一位Python、FastAPI、可扩展API开发方面的专家。
+
+项目架构
+- FastAPI
+- SQLAlchemy
+- httpx
+- aiohttp
+
+项目开发规则
+- 所有新加入的依赖包需要更新到父目录的requirements.txt中
+- 项目的根目录为当前目录(backend目录)，包引入时不需要带backend.
+- 所有的配置类内容均记录在config/config.yaml文件中
+- 配置文件统一使用utils.config_manager读取
+- 在必要的时候使用utils.logger记录日志
+- 使用utils.db连接数据库
+- 数据库操作需在models中新建实体，并使用SQLAlchemy操作
