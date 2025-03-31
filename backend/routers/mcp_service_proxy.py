@@ -4,6 +4,7 @@ import httpx
 from typing import Dict
 from models.mcp_service_model import McpServiceModel, ServiceStatus
 from utils.db import DatabaseManager
+from utils.logger import log
 import asyncio
 from contextlib import asynccontextmanager
 
@@ -37,6 +38,7 @@ async def forward_sse_request(request: Request, target_url: str):
     """
     转发 SSE 请求到目标URL
     """
+    log.debug(f"开始转发SSE请求到: {target_url}")
     async with get_client() as client:
         try:
             headers = dict(request.headers)
@@ -48,6 +50,7 @@ async def forward_sse_request(request: Request, target_url: str):
             headers["Connection"] = "keep-alive"
             
             async with client.stream("GET", target_url, headers=headers) as response:
+                log.debug(f"SSE请求转发成功: {target_url}")
                 # 设置 SSE 响应头
                 return StreamingResponse(
                     response.aiter_raw(),
@@ -59,12 +62,14 @@ async def forward_sse_request(request: Request, target_url: str):
                     }
                 )
         except Exception as e:
+            log.error(f"SSE请求转发失败: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
 async def forward_request(request: Request, target_url: str):
     """
     转发普通请求到目标URL
     """
+    log.debug(f"开始转发请求到: {target_url}")
     async with get_client() as client:
         try:
             # 获取原始请求的方法、头部和内容
@@ -85,6 +90,7 @@ async def forward_request(request: Request, target_url: str):
                 follow_redirects=True
             )
             
+            log.debug(f"请求转发成功: {target_url}, 状态码: {response.status_code}")
             # 创建响应
             return StreamingResponse(
                 response.aiter_raw(),
@@ -92,6 +98,7 @@ async def forward_request(request: Request, target_url: str):
                 headers=dict(response.headers)
             )
         except Exception as e:
+            log.error(f"请求转发失败: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
 @router.api_route("/{endpoint}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -104,20 +111,25 @@ async def proxy_request(
     """
     处理MCP服务的接口转发
     """
+    log.info(f"收到代理请求: {endpoint}/{path}")
     # 查找对应的MCP服务
     service = mcp_service_model.get_service_by_endpoint(endpoint)
     if not service:
+        log.error(f"代理请求失败：未找到端点 {endpoint} 对应的服务")
         raise HTTPException(status_code=404, detail=f"Service with endpoint {endpoint} not found")
     
     if service.status != ServiceStatus.ACTIVE:
+        log.warning(f"代理请求失败：服务 {service.name} 未激活")
         raise HTTPException(status_code=503, detail=f"Service {service.name} is not active")
     
     # 构建目标URL
     target_url = f"http://{service.ip}:{service.port}/{path}"
+    log.debug(f"目标URL: {target_url}")
     
     # 检查是否是 SSE 请求
     accept_header = request.headers.get("accept", "")
     if "text/event-stream" in accept_header:
+        log.debug(f"检测到SSE请求: {target_url}")
         return await forward_sse_request(request, target_url)
     
     # 普通请求转发
