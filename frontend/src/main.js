@@ -4,6 +4,8 @@ import PrimeVue from 'primevue/config'
 import { definePreset } from '@primeuix/themes';
 import Lara from '@primeuix/themes/lara';
 import 'primeicons/primeicons.css'
+import 'primeicons/fonts/primeicons.woff2'
+import 'primeicons/fonts/primeicons.woff'
 
 const MyTheme = definePreset(Lara, {
     semantic: {

@@ -1,24 +1,74 @@
 <template>
-  <Card class="m-2">
+  <Card class="shadow-3 m-3">
     <template #header>
-      <h3>{{ service.name }}</h3>
-    </template>
-    <template #content>
-      <p>Endpoint: {{ service.endpoint }}</p>
-      <p>IP: {{ service.ip }}</p>
-      <p>Port: {{ service.port }}</p>
-      <p>Version: {{ service.version || 'N/A' }}</p>
-      <p>Status: 
+      <div class="flex justify-content-between align-items-center p-3">
+        <h3 class="m-0">{{ service.name }}</h3>
         <Tag :value="service.status" 
              :severity="getStatusSeverity(service.status)" />
-      </p>
-      <p>创建时间: {{ formatDateTime(service.created_tm) }}</p>
-      <p>修改时间: {{ formatDateTime(service.updated_tm) }}</p>
-      <p>状态检查时间: {{ formatDateTime(service.status_check_tm) }}</p>
-      <p>创建方式: {{ service.creation_type === 'manual' ? '手动' : '自动' }}</p>
+      </div>
+    </template>
+    <template #content>
+      <div class="grid">
+        <div class="col-12">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">服务描述</label>
+            <div class="text-900">{{ service.description || 'N/A' }}</div>
+          </div>
+        </div>
+        <div class="col-12">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">服务端点</label>
+            <div class="text-900">{{ service.endpoint }}</div>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">IP地址</label>
+            <div class="text-900">{{ service.ip || 'N/A' }}</div>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">端口号</label>
+            <div class="text-900">{{ service.port || 'N/A' }}</div>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">版本</label>
+            <div class="text-900">{{ service.version || 'N/A' }}</div>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">创建方式</label>
+            <div class="text-900">{{ service.creation_type === 'manual' ? '手动' : '自动' }}</div>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">创建时间</label>
+            <div class="text-900">{{ formatDateTime(service.created_tm) }}</div>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">修改时间</label>
+            <div class="text-900">{{ formatDateTime(service.updated_tm) }}</div>
+          </div>
+        </div>
+        <div class="col-12">
+          <div class="field">
+            <label class="block text-sm font-medium text-500 mb-1">状态检查时间</label>
+            <div class="text-900">{{ formatDateTime(service.status_check_tm) }}</div>
+          </div>
+        </div>
+      </div>
     </template>
     <template #footer>
-      <Button label="删除服务" icon="pi pi-trash" class="p-button-danger" @click="deleteService(service.id)" />
+      <div class="flex justify-content-end">
+        <Button label="删除服务" icon="pi pi-trash" class="p-button-danger" @click="deleteService(service.id)" />
+      </div>
     </template>
   </Card>
 </template>
@@ -64,7 +114,10 @@ export default {
 </script>
 
 <style scoped>
-.p-card-content p {
-  margin: 0.5rem 0;
+.field {
+  margin-bottom: 1rem;
+}
+.field:last-child {
+  margin-bottom: 0;
 }
 </style>

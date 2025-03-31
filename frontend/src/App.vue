@@ -1,44 +1,58 @@
 <template>
-  <div>
-    <h1>MCP Gateway Dashboard</h1>
-    <Button label="添加服务" icon="pi pi-plus" @click="showModal = true" />
-    <Dialog v-model="showModal" modal header="注册新服务" :style="{ width: '50vw' }">
+  <div class="p-4">
+    <div class="flex justify-content-between align-items-center mb-4">
+      <h1 class="m-0">MCP Gateway Dashboard</h1>
+      <Button label="添加服务" icon="pi pi-plus" @click="showModal = true" />
+    </div>
+    <Dialog v-model:visible="showModal" modal header="注册新服务" :style="{ width: '50vw' }" class="p-fluid">
       <form @submit.prevent="registerService">
-        <div class="p-fluid">
-          <div class="p-field">
-            <label for="name">服务名称</label>
-            <InputText id="name" v-model="newService.name" required />
+        <div class="grid">
+          <div class="col-12">
+            <div class="field">
+              <label for="name" class="block">服务名称</label>
+              <InputText id="name" v-model="newService.name" class="w-full" required />
+            </div>
           </div>
-          <div class="p-field">
-            <label for="description">服务描述</label>
-            <InputText id="description" v-model="newService.description" />
+          <div class="col-12">
+            <div class="field">
+              <label for="description" class="block">服务描述</label>
+              <InputText id="description" v-model="newService.description" class="w-full" />
+            </div>
           </div>
-          <div class="p-field">
-            <label for="endpoint">服务端点</label>
-            <InputText id="endpoint" v-model="newService.endpoint" required />
+          <div class="col-12">
+            <div class="field">
+              <label for="endpoint" class="block">服务端点</label>
+              <InputText id="endpoint" v-model="newService.endpoint" class="w-full" required />
+            </div>
           </div>
-          <div class="p-field">
-            <label for="ip">IP地址</label>
-            <InputText id="ip" v-model="newService.ip" />
+          <div class="col-6">
+            <div class="field">
+              <label for="ip" class="block">IP地址</label>
+              <InputText id="ip" v-model="newService.ip" class="w-full" />
+            </div>
           </div>
-          <div class="p-field">
-            <label for="port">端口号</label>
-            <InputNumber id="port" v-model="newService.port" />
+          <div class="col-6">
+            <div class="field">
+              <label for="port" class="block">端口号</label>
+              <InputNumber id="port" v-model="newService.port" class="w-full" />
+            </div>
           </div>
-          <div class="p-field">
-            <label for="version">版本</label>
-            <InputText id="version" v-model="newService.version" />
+          <div class="col-12">
+            <div class="field">
+              <label for="version" class="block">版本</label>
+              <InputText id="version" v-model="newService.version" class="w-full" />
+            </div>
           </div>
-          <Button type="submit" label="注册服务" class="p-mt-3" />
+          <div class="col-12">
+            <Button type="submit" label="注册服务" class="w-full" />
+          </div>
         </div>
       </form>
     </Dialog>
-    <div id="services-container">
-      <ServiceCard 
-        v-for="service in services" 
-        :key="service.name"
-        :service="service"
-      />
+    <div id="services-container" class="grid">
+      <div class="col-12 md:col-6 lg:col-4" v-for="service in services" :key="service.name">
+        <ServiceCard :service="service" />
+      </div>
     </div>
   </div>
 </template>
@@ -108,11 +122,14 @@ export default {
 
 <style scoped>
 #services-container {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  gap: 1rem;
+  min-height: 100vh;
 }
-.p-field {
-  margin-bottom: 1rem;
+.field {
+  margin-bottom: 1.5rem;
+}
+.field label {
+  margin-bottom: 0.5rem;
+  font-weight: 500;
 }
 </style>
