@@ -1,1 +1,1 @@
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4 --limit-concurrency 1000 --backlog 2048 --timeout-keep-alive 30 --log-level info

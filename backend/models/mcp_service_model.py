@@ -47,6 +47,16 @@ class McpServiceModel:
         finally:
             session.close()
 
+    def get_service_by_endpoint(self, endpoint: str) -> Optional[McpService]:
+        """
+        根据endpoint名称查找服务
+        """
+        session = self.db.connect()
+        try:
+            return session.query(McpService).filter(McpService.endpoint == endpoint).first()
+        finally:
+            session.close()
+
     def register_mcp_service(self, mcp_service: McpService):
         session = self.db.connect()
 

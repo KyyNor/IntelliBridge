@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict
-from models.service_model import McpService, McpServiceModel, ServiceStatus, CreationType
+from backend.models.mcp_service_model import McpService, McpServiceModel, ServiceStatus, CreationType
 from utils.db import DatabaseManager
 import datetime
 
