@@ -49,9 +49,54 @@
         </div>
       </form>
     </Dialog>
+    <Dialog v-model:visible="showEditModal" modal header="修改服务" :style="{ width: '50vw' }" class="p-fluid">
+      <form @submit.prevent="updateService">
+        <div class="grid">
+          <div class="col-12">
+            <div class="field">
+              <label for="edit-name" class="block">服务名称</label>
+              <InputText id="edit-name" v-model="editingService.name" class="w-full" required />
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="field">
+              <label for="edit-description" class="block">服务描述</label>
+              <InputText id="edit-description" v-model="editingService.description" class="w-full" />
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="field">
+              <label for="edit-endpoint" class="block">服务端点</label>
+              <InputText id="edit-endpoint" v-model="editingService.endpoint" class="w-full" required />
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="field">
+              <label for="edit-ip" class="block">IP地址</label>
+              <InputText id="edit-ip" v-model="editingService.ip" class="w-full" />
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="field">
+              <label for="edit-port" class="block">端口号</label>
+              <InputNumber id="edit-port" v-model="editingService.port" class="w-full" />
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="field">
+              <label for="edit-version" class="block">版本</label>
+              <InputText id="edit-version" v-model="editingService.version" class="w-full" />
+            </div>
+          </div>
+          <div class="col-12">
+            <Button type="submit" label="保存修改" class="w-full" />
+          </div>
+        </div>
+      </form>
+    </Dialog>
     <div id="services-container" class="grid">
       <div class="col-12 md:col-6 lg:col-4" v-for="service in services" :key="service.name">
-        <ServiceCard :service="service" />
+        <ServiceCard :service="service" @refreshServices="fetchServices" @editService="handleEditService" />
       </div>
     </div>
   </div>
@@ -81,7 +126,17 @@ export default {
       port: null,
       version: ''
     })
+    const editingService = ref({
+      id: '',
+      name: '',
+      description: '',
+      endpoint: '',
+      ip: '',
+      port: null,
+      version: ''
+    })
     const showModal = ref(false)
+    const showEditModal = ref(false)
 
     const fetchServices = async () => {
       try {
@@ -110,12 +165,36 @@ export default {
       }
     }
 
+    const handleEditService = (service) => {
+      editingService.value = { ...service }
+      showEditModal.value = true
+    }
+
+    const updateService = async () => {
+      try {
+        await axios.put(`${API_CONFIG.baseUrl}/api/mcp_service_manager/update/${editingService.value.id}`, editingService.value)
+        showEditModal.value = false
+        fetchServices()
+      } catch (error) {
+        console.error('Error updating service:', error)
+      }
+    }
+
     onMounted(() => {
       fetchServices()
       setInterval(fetchServices, 30000)
     })
 
-    return { services, newService, registerService, showModal }
+    return { 
+      services, 
+      newService, 
+      editingService,
+      registerService, 
+      updateService,
+      handleEditService,
+      showModal,
+      showEditModal 
+    }
   }
 }
 </script>

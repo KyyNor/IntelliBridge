@@ -66,7 +66,9 @@
       </div>
     </template>
     <template #footer>
-      <div class="flex justify-content-end">
+      <div class="flex justify-content-end gap-2">
+        <Button label="修改服务" icon="pi pi-pencil" class="p-button-secondary" @click="editService" />
+        <Button label="手动扫描" icon="pi pi-sync" class="p-button-info" @click="scanService" />
         <Button label="删除服务" icon="pi pi-trash" class="p-button-danger" @click="deleteService(service.id)" />
       </div>
     </template>
@@ -96,6 +98,17 @@ export default {
       } catch (error) {
         console.error('Error deleting service:', error)
       }
+    },
+    async scanService() {
+      try {
+        await axios.post(`${API_CONFIG.baseUrl}/api/mcp_service_scanner/scan/${this.service.id}`)
+        this.$emit('refreshServices')
+      } catch (error) {
+        console.error('Error scanning service:', error)
+      }
+    },
+    editService() {
+      this.$emit('editService', this.service)
     },
     formatDateTime(datetime) {
       if (!datetime) return 'N/A'
