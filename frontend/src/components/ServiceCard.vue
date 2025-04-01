@@ -116,7 +116,7 @@ export default {
     },
     getStatusSeverity(status) {
       const severityMap = {
-        'active': 'success',
+        'online': 'success',
         'offline': 'danger',
         'maintenance': 'warning'
       }

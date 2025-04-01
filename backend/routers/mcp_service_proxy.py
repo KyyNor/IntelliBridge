@@ -41,26 +41,41 @@ async def forward_sse_request(request: Request, target_url: str):
     log.debug(f"开始转发SSE请求到: {target_url}")
     async with get_client() as client:
         try:
+            # headers = dict(request.headers)
+            # headers.pop("host", None)
+            
+            # # SSE 请求需要设置特殊的 headers
+            # headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            # headers["Cache-Control"] = "max-age=0"
+            # headers["Connection"] = "keep-alive"
+            
+            # async with client.stream("GET", target_url, headers=headers) as response:
+            #     log.debug(f"SSE请求转发成功: {target_url}")
+            #     # 设置 SSE 响应头
+            #     return StreamingResponse(
+            #         response.aiter_raw(),
+            #         headers={
+            #             "Cache-Control": "no-store",
+            #             "Connection": "keep-alive",
+            #             "Content-Type": "text/event-stream; charset=utf-8"
+            #         }
+            #     )
+            
             headers = dict(request.headers)
             headers.pop("host", None)
-            
-            # SSE 请求需要设置特殊的 headers
-            headers["Accept"] = "text/event-stream"
-            headers["Cache-Control"] = "no-cache"
+            headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            headers["Cache-Control"] = "max-age=0"
             headers["Connection"] = "keep-alive"
             
-            async with client.stream("GET", target_url, headers=headers) as response:
-                log.debug(f"SSE请求转发成功: {target_url}")
-                # 设置 SSE 响应头
-                return StreamingResponse(
-                    response.aiter_raw(),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "Content-Type": "text/event-stream"
-                    }
-                )
+            upstream_response = await client.stream("GET", target_url, headers=headers)
+            
+            if upstream_response.status_code != 200:
+                return {"error": f"SSE请求转发失败 {upstream_response.status_code}"}
+            
+            return StreamingResponse(
+                upstream_response.aiter_bytes(),
+                media_type="text/event-stream"
+            )
         except Exception as e:
             log.error(f"SSE请求转发失败: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -118,17 +133,17 @@ async def proxy_request(
         log.error(f"代理请求失败：未找到端点 {endpoint} 对应的服务")
         raise HTTPException(status_code=404, detail=f"Service with endpoint {endpoint} not found")
     
-    if service.status != ServiceStatus.ACTIVE:
+    if service.status != ServiceStatus.ONLINE:
         log.warning(f"代理请求失败：服务 {service.name} 未激活")
-        raise HTTPException(status_code=503, detail=f"Service {service.name} is not active")
+        raise HTTPException(status_code=503, detail=f"Service {service.name} is not online")
     
     # 构建目标URL
     target_url = f"http://{service.ip}:{service.port}/{path}"
     log.debug(f"目标URL: {target_url}")
     
     # 检查是否是 SSE 请求
-    accept_header = request.headers.get("accept", "")
-    if "text/event-stream" in accept_header:
+    # accept_header = request.headers.get("accept", "")
+    if "/sse" in target_url:
         log.debug(f"检测到SSE请求: {target_url}")
         return await forward_sse_request(request, target_url)
     

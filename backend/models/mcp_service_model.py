@@ -10,7 +10,7 @@ Base = declarative_base()
 
 class ServiceStatus(str, Enum):
     OFFLINE = 'offline'
-    ACTIVE = 'active'
+    ONLINE = 'online'
     MAINTENANCE = 'maintenance'
 
 class CreationType(str, Enum):
@@ -27,8 +27,8 @@ class McpService(Base):
     ip = Column(String(50))
     port = Column(Integer)
     version = Column(String(50))
-    created_tm = Column(DateTime, default=datetime.datetime.now(datetime.UTC))
-    updated_tm = Column(DateTime, onupdate=datetime.datetime.now(datetime.UTC))
+    created_tm = Column(DateTime, default=datetime.datetime.now())
+    updated_tm = Column(DateTime, onupdate=datetime.datetime.now())
     status = Column(String(20), default=ServiceStatus.OFFLINE)
     status_check_tm = Column(DateTime)
     creation_type = Column(String(20), default=CreationType.MANUAL)
@@ -78,5 +78,17 @@ class McpServiceModel:
         session = self.db.connect()
         try:
             return session.query(McpService).all()
+        finally:
+            session.close()
+            
+    def update_service_status(self, mcp_service: McpService):
+        session = self.db.connect()
+        try:
+            session.merge(mcp_service)
+            session.commit()
+            return mcp_service
+        except Exception as e:
+            session.rollback()
+            raise e
         finally:
             session.close()

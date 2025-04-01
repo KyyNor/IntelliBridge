@@ -1,6 +1,6 @@
 import aiohttp
 import asyncio
-from datetime import datetime, timedelta
+import datetime
 from typing import List
 from models.mcp_service_model import McpService, ServiceStatus
 from utils.config_manager import ConfigManager
@@ -20,8 +20,9 @@ class McpServiceScanTasker:
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(service.endpoint, timeout=5) as response:
+                async with session.get(f"http://{service.ip}:{service.port}/sse", timeout=5) as response:
                     if response.status == 200:
+                        log.info(response)
                         log.debug(f"服务 {service.name} 状态检查成功")
                         return ServiceStatus.ONLINE
                     log.warning(f"服务 {service.name} 返回非200状态码: {response.status}")
@@ -34,7 +35,7 @@ class McpServiceScanTasker:
         """扫描单个服务并更新状态"""
         log.debug(f"开始扫描服务: {service.name}")
         current_status = await self.check_service_status(service)
-        current_time = datetime.now(datetime.UTC)
+        current_time = datetime.datetime.now()
         
         service.status = current_status
         service.status_check_tm = current_time
@@ -57,7 +58,7 @@ class McpServiceScanTasker:
             log.debug(f"服务 {service.name} 从未被扫描过")
             return True
 
-        current_time = datetime.now(datetime.UTC)
+        current_time = datetime.datetime.now()
         time_diff = current_time - service.status_check_tm
 
         if service.status == ServiceStatus.ONLINE:

@@ -26,7 +26,7 @@ async def register_mcp_service(mcp_service_info: dict, mcp_service_model: McpSer
         log.error("注册服务失败：缺少服务名称")
         raise HTTPException(status_code=400, detail="Service name is required")
     
-    current_time = datetime.datetime.now(datetime.UTC)
+    current_time = datetime.datetime.now()
     
     if mcp_service_id:
         # 存在服务ID，执行修改操作
