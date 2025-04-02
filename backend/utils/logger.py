@@ -2,6 +2,7 @@ from loguru import logger
 import sys
 import os
 
+
 class Logger:
     _instance = None
     
@@ -40,4 +41,4 @@ class Logger:
         return logger
 
 # 创建一个全局的logger实例
-log = Logger.get_logger() 
+log = Logger.get_logger()

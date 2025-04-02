@@ -3,12 +3,24 @@ import yaml
 from typing import Dict, Any
 from utils.logger import log
 
+
 class ConfigManager:
-    def __init__(self):
-        config_path = str(Path(__file__).parent.parent / 'config' / 'config.yaml')
-        self.config_path = Path(config_path)
-        log.info(f"初始化配置管理器，配置文件路径: {config_path}")
-        self._config = self._load_config()
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ConfigManager, cls).__new__(cls)
+            cls._instance.config_path = str(Path(__file__).parent.parent / 'config' / 'config.yaml')
+            cls._instance.config_path = Path(cls._instance.config_path)
+            log.info(f"初始化配置管理器，配置文件路径: {cls._instance.config_path}")
+            cls._instance._config = cls._instance._load_config()
+        return cls._instance
+
+    # def __init__(self):
+    #     config_path = str(Path(__file__).parent.parent / 'config' / 'config.yaml')
+    #     self.config_path = Path(config_path)
+    #     log.info(f"初始化配置管理器，配置文件路径: {config_path}")
+    #     self._config = self._load_config()
     
     def _load_config(self) -> Dict[str, Any]:
         try:

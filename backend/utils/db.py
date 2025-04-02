@@ -10,25 +10,50 @@ from pathlib import Path
 
 Base = declarative_base()
 
+
 class DatabaseManager:
-    def __init__(self):
-        self.settings = ConfigManager()
-        log.info("初始化数据库管理器")
-        
-        if self.settings.db_type == 'sqlite':
-            sqlite_base_url = str(Path(__file__).parent.parent / 'embedded_database')
-            db_url = f"sqlite:///{sqlite_base_url}/{self.settings.sqlite_db_path}"
-            log.info(f"使用SQLite数据库: {db_url}")
-        elif self.settings.db_type == 'mysql':
-            mysql_config = self.settings.mysql_config
-            db_url = f"mysql+pymysql://{mysql_config['user']}:{mysql_config['password']}@{mysql_config['host']}/{mysql_config['database']}"
-            log.info(f"使用MySQL数据库: {mysql_config['host']}/{mysql_config['database']}")
-        else:
-            log.error(f"不支持的数据库类型: {self.settings.db_type}")
-            raise HTTPException(status_code=400, detail="Unsupported database type")
-            
-        self.engine = create_engine(db_url)
-        self.Session = sessionmaker(bind=self.engine)
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(DatabaseManager, cls).__new__(cls)
+            cls._instance.settings = ConfigManager()
+            log.info("初始化数据库管理器")
+
+            if cls._instance.settings.db_type == 'sqlite':
+                sqlite_base_url = str(Path(__file__).parent.parent / 'embedded_database')
+                db_url = f"sqlite:///{sqlite_base_url}/{cls._instance.settings.sqlite_db_path}"
+                log.info(f"使用SQLite数据库: {db_url}")
+            elif cls._instance.settings.db_type == 'mysql':
+                mysql_config = cls._instance.settings.mysql_config
+                db_url = f"mysql+pymysql://{mysql_config['user']}:{mysql_config['password']}@{mysql_config['host']}/{mysql_config['database']}"
+                log.info(f"使用MySQL数据库: {mysql_config['host']}/{mysql_config['database']}")
+            else:
+                log.error(f"不支持的数据库类型: {cls._instance.settings.db_type}")
+                raise HTTPException(status_code=400, detail="Unsupported database type")
+
+            cls._instance.engine = create_engine(db_url)
+            cls._instance.Session = sessionmaker(bind=cls._instance.engine)
+        return cls._instance
+
+    # def __init__(self):
+    #     self.settings = ConfigManager()
+    #     log.info("初始化数据库管理器")
+    #
+    #     if self.settings.db_type == 'sqlite':
+    #         sqlite_base_url = str(Path(__file__).parent.parent / 'embedded_database')
+    #         db_url = f"sqlite:///{sqlite_base_url}/{self.settings.sqlite_db_path}"
+    #         log.info(f"使用SQLite数据库: {db_url}")
+    #     elif self.settings.db_type == 'mysql':
+    #         mysql_config = self.settings.mysql_config
+    #         db_url = f"mysql+pymysql://{mysql_config['user']}:{mysql_config['password']}@{mysql_config['host']}/{mysql_config['database']}"
+    #         log.info(f"使用MySQL数据库: {mysql_config['host']}/{mysql_config['database']}")
+    #     else:
+    #         log.error(f"不支持的数据库类型: {self.settings.db_type}")
+    #         raise HTTPException(status_code=400, detail="Unsupported database type")
+    #
+    #     self.engine = create_engine(db_url)
+    #     self.Session = sessionmaker(bind=self.engine)
 
     def connect(self):
         try:

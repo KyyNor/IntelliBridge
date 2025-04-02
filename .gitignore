@@ -140,5 +140,6 @@ cython_debug/
 # Node.js
 node_modules/
 
+.idea/
 
 intelli_bridge.db
