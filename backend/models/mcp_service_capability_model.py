@@ -32,43 +32,38 @@ class McpServiceCapabilityModel:
         """
         根据服务ID查询所有工具和资源
         """
-        session = self.db.connect()
-        try:
+        with self.db.get_session() as session:
             return session.query(McpServiceCapability).filter(
                 McpServiceCapability.service_id == service_id
             ).all()
-        finally:
-            session.close()
 
     def update_service_capabilities(self, service_id: int, capabilities: List[Dict]) -> List[McpServiceCapability]:
         """
         更新服务的工具和资源列表
         会先删除该服务ID下的所有历史记录，然后插入新的记录
         """
-        session = self.db.connect()
-        try:
-            # 删除该服务ID下的所有历史记录
-            session.query(McpServiceCapability).filter(
-                McpServiceCapability.service_id == service_id
-            ).delete()
-            
-            # 插入新的记录
-            new_capabilities = []
-            for capability_data in capabilities:
-                capability = McpServiceCapability(
-                    service_id=service_id,
-                    name=capability_data.get('name'),
-                    description=capability_data.get('description'),
-                    cap_type=capability_data.get('cap_type'),
-                    parameters=capability_data.get('parameters')
-                )
-                session.add(capability)
-                new_capabilities.append(capability)
-            
-            session.commit()
-            return new_capabilities
-        except Exception as e:
-            session.rollback()
-            raise e
-        finally:
-            session.close()
+        with self.db.get_session() as session:
+            try:
+                # 删除该服务ID下的所有历史记录
+                session.query(McpServiceCapability).filter(
+                    McpServiceCapability.service_id == service_id
+                ).delete()
+                
+                # 插入新的记录
+                new_capabilities = []
+                for capability_data in capabilities:
+                    capability = McpServiceCapability(
+                        service_id=service_id,
+                        name=capability_data.get('name'),
+                        description=capability_data.get('description'),
+                        cap_type=capability_data.get('cap_type'),
+                        parameters=capability_data.get('parameters')
+                    )
+                    session.add(capability)
+                    new_capabilities.append(capability)
+                
+                session.commit()
+                return new_capabilities
+            except Exception as e:
+                session.rollback()
+                raise e
