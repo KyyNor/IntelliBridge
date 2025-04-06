@@ -16,13 +16,12 @@ class McpServiceCapability(Base):
     __tablename__ = 'ib_mcp_service_capability'  # 保持表名不变，避免数据库迁移问题
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    service_id = Column(Integer, ForeignKey('ib_mcp_service_info.id'), nullable=False)
+    service_id = Column(Integer, nullable=False)
     name = Column(String(255), nullable=False)
     description = Column(Text)
-    type = Column(String(20), nullable=False, default=CapabilityType.TOOL)  # 类型字段
+    cap_type = Column(String(20), nullable=False, default=CapabilityType.TOOL)  # 类型字段
     parameters = Column(Text)  # 存储JSON格式的参数列表
     created_tm = Column(DateTime, default=datetime.datetime.now())
-    updated_tm = Column(DateTime, onupdate=datetime.datetime.now())
 
 class McpServiceCapabilityModel:
     def __init__(self, db_manager: DatabaseManager):
@@ -60,6 +59,7 @@ class McpServiceCapabilityModel:
                     service_id=service_id,
                     name=capability_data.get('name'),
                     description=capability_data.get('description'),
+                    cap_type=capability_data.get('cap_type'),
                     parameters=capability_data.get('parameters')
                 )
                 session.add(capability)
