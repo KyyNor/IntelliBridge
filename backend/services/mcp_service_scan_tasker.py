@@ -2,6 +2,8 @@ import httpx
 import asyncio
 import datetime
 from typing import List
+from mcp.client.sse import sse_client
+from mcp import ClientSession, types
 from models.mcp_service_model import McpService, ServiceStatus
 from utils.config_manager import ConfigManager
 from utils.logger import log
@@ -19,14 +21,20 @@ class McpServiceScanTasker:
             return ServiceStatus.OFFLINE
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"http://{service.ip}:{service.port}/sse")
-                if response.status_code == 200:
-                    log.info(response)
-                    log.debug(f"服务 {service.name} 状态检查成功")
+            async with sse_client(f"http://{service.ip}:{service.port}/sse") as (read, write):
+                async with ClientSession(read, write) as session:
+                    # Initialize the connection
+                    await session.initialize()
+                    prompts = await session.list_prompts()
+                    # List available resources
+                    resources = await session.list_resources()
+                    # List available tools
+                    tools = await session.list_tools()
+                    log.info(f"服务 {service.name} 可用提示词: {prompts}")
+                    log.info(f"服务 {service.name} 可用资源: {resources}")
+                    log.info(f"服务 {service.name} 可用工具: {tools}")
+
                     return ServiceStatus.ONLINE
-                log.warning(f"服务 {service.name} 返回非200状态码: {response.status_code}")
-                return ServiceStatus.OFFLINE
         except Exception as e:
             log.error(f"服务 {service.name} 状态检查失败: {str(e)}")
             return ServiceStatus.OFFLINE
