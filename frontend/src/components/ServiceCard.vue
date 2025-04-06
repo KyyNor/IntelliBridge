@@ -108,6 +108,7 @@ export default {
       }
     },
     editService() {
+      // 确保传递完整的服务信息，包括id字段
       this.$emit('editService', this.service)
     },
     formatDateTime(datetime) {

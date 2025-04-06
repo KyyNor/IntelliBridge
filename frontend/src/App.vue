@@ -172,7 +172,7 @@ export default {
 
     const updateService = async () => {
       try {
-        await axios.put(`${API_CONFIG.baseUrl}/api/mcp_service_manager/update/${editingService.value.id}`, editingService.value)
+        await axios.post(`${API_CONFIG.baseUrl}/api/mcp_service_manager/register`, editingService.value)
         showEditModal.value = false
         fetchServices()
       } catch (error) {
