@@ -89,6 +89,25 @@ async def list_services(mcp_service_model: McpServiceModel = Depends(get_mcp_ser
     log.debug(f"获取到 {len(mcp_services)} 个服务")
     return {"services": mcp_services}
 
+@router.delete("/delete/{service_id}")
+async def delete_service(service_id: int, mcp_service_model: McpServiceModel = Depends(get_mcp_service_model)):
+    """
+    删除指定ID的服务
+    """
+    log.info(f"开始删除服务: {service_id}")
+    service = mcp_service_model.get_service_by_id(service_id)
+    if not service:
+        log.error(f"删除服务失败：服务 {service_id} 不存在")
+        raise HTTPException(status_code=404, detail="Service not found")
+        
+    success = mcp_service_model.delete_service(service_id)
+    if success:
+        log.info(f"服务 {service_id} 删除成功")
+        return {"message": f"Service {service_id} deleted successfully"}
+    else:
+        log.error(f"服务 {service_id} 删除失败")
+        raise HTTPException(status_code=500, detail="Failed to delete service")
+
 @router.get("/capabilities/{service_id}")
 async def get_service_capabilities(
     service_id: int,

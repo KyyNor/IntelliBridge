@@ -76,7 +76,7 @@
   </Card>
   
   <!-- 服务能力对话框 -->
-  <Dialog v-model:visible="capabilitiesDialog" modal header="服务能力" :style="{ width: '70vw' }" class="p-fluid">
+  <Dialog v-model:visible="capabilitiesDialog" modal header="服务能力" :style="{ width: '70vw' }" class="p-fluid" :closeOnEscape="true" :dismissableMask="true">
     <div v-if="loading" class="flex justify-content-center">
       <ProgressSpinner />
     </div>
@@ -132,6 +132,25 @@
       </TabPanel>
     </TabView>
   </Dialog>
+  
+  <!-- 删除确认对话框 -->
+  <Dialog v-model:visible="deleteConfirmDialog" modal header="确认删除" :style="{ width: '25vw' }" class="p-fluid delete-confirm-dialog">
+    <div class="p-3 text-center">
+      <i class="pi pi-exclamation-triangle text-4xl text-yellow-500 mb-2"></i>
+      <p class="font-bold mb-2">确定要删除此服务吗？</p>
+      <div class="service-info p-2 mb-2">
+        <div class="info-item"><span class="info-label">服务名称:</span> {{ service.name }}</div>
+        <div class="info-item"><span class="info-label">服务端点:</span> {{ service.endpoint }}</div>
+      </div>
+      <p class="text-sm text-red-500">此操作不可恢复</p>
+    </div>
+    <template #footer>
+      <div class="flex justify-content-end gap-2">
+        <Button label="取消" icon="pi pi-times" class="p-button-text p-button-sm" @click="deleteConfirmDialog = false" />
+        <Button label="确认删除" icon="pi pi-trash" class="p-button-danger p-button-sm" @click="confirmDelete" />
+      </div>
+    </template>
+  </Dialog>
 </template>
 
 <script>
@@ -163,11 +182,15 @@ export default {
     const capabilitiesDialog = ref(false)
     const capabilities = ref([])
     const loading = ref(false)
+    const deleteConfirmDialog = ref(false)
+    const serviceToDelete = ref(null)
 
     return {
       capabilitiesDialog,
       capabilities,
-      loading
+      loading,
+      deleteConfirmDialog,
+      serviceToDelete
     }
   },
   computed: {
@@ -180,8 +203,13 @@ export default {
   },
   methods: {
     async deleteService(serviceId) {
+      this.serviceToDelete = serviceId;
+      this.deleteConfirmDialog = true;
+    },
+    async confirmDelete() {
       try {
-        await axios.delete(`${API_CONFIG.baseUrl}/api/mcp_service_manager/delete/${serviceId}`)
+        await axios.delete(`${API_CONFIG.baseUrl}/api/mcp_service_manager/delete/${this.serviceToDelete}`)
+        this.deleteConfirmDialog = false;
         this.$emit('refreshServices')
       } catch (error) {
         console.error('Error deleting service:', error)
@@ -269,5 +297,21 @@ export default {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.delete-confirm-dialog :deep(.p-dialog-content) {
+  padding: 0.75rem;
+}
+.service-info {
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  text-align: left;
+  border: 1px solid #e9ecef;
+}
+.info-item {
+  padding: 0.25rem 0;
+}
+.info-label {
+  font-weight: 600;
+  margin-right: 0.5rem;
 }
 </style>

@@ -4,7 +4,7 @@
       <h1 class="m-0">MCP Gateway Dashboard</h1>
       <Button label="添加服务" icon="pi pi-plus" @click="showModal = true" />
     </div>
-    <Dialog v-model:visible="showModal" modal header="注册新服务" :style="{ width: '50vw' }" class="p-fluid">
+    <Dialog v-model:visible="showModal" modal header="注册新服务" :style="{ width: '50vw' }" class="p-fluid" :closeOnEscape="false" :dismissableMask="false">
       <form @submit.prevent="registerService">
         <div class="grid">
           <div class="col-12">
@@ -49,7 +49,7 @@
         </div>
       </form>
     </Dialog>
-    <Dialog v-model:visible="showEditModal" modal header="修改服务" :style="{ width: '50vw' }" class="p-fluid">
+    <Dialog v-model:visible="showEditModal" modal header="修改服务" :style="{ width: '50vw' }" class="p-fluid" :closeOnEscape="false" :dismissableMask="false">
       <form @submit.prevent="updateService">
         <div class="grid">
           <div class="col-12">

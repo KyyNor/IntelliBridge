@@ -92,3 +92,21 @@ class McpServiceModel:
             raise e
         finally:
             session.close()
+            
+    def delete_service(self, service_id: int) -> bool:
+        """
+        删除指定ID的服务
+        """
+        session = self.db.connect()
+        try:
+            service = session.query(McpService).get(service_id)
+            if not service:
+                return False
+            session.delete(service)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
