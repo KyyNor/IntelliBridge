@@ -1,4 +1,4 @@
-import aiohttp
+import httpx
 import asyncio
 import datetime
 from typing import List
@@ -19,14 +19,14 @@ class McpServiceScanTasker:
             return ServiceStatus.OFFLINE
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"http://{service.ip}:{service.port}/sse", timeout=5) as response:
-                    if response.status == 200:
-                        log.info(response)
-                        log.debug(f"服务 {service.name} 状态检查成功")
-                        return ServiceStatus.ONLINE
-                    log.warning(f"服务 {service.name} 返回非200状态码: {response.status}")
-                    return ServiceStatus.OFFLINE
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"http://{service.ip}:{service.port}/sse")
+                if response.status_code == 200:
+                    log.info(response)
+                    log.debug(f"服务 {service.name} 状态检查成功")
+                    return ServiceStatus.ONLINE
+                log.warning(f"服务 {service.name} 返回非200状态码: {response.status_code}")
+                return ServiceStatus.OFFLINE
         except Exception as e:
             log.error(f"服务 {service.name} 状态检查失败: {str(e)}")
             return ServiceStatus.OFFLINE
@@ -68,4 +68,4 @@ class McpServiceScanTasker:
             
         if should_scan:
             log.debug(f"服务 {service.name} 需要扫描，距离上次扫描已过去 {time_diff.total_seconds():.1f} 秒")
-        return should_scan 
+        return should_scan
