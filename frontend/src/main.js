@@ -7,6 +7,14 @@ import 'primeicons/primeicons.css'
 import 'primeicons/fonts/primeicons.woff2'
 import 'primeicons/fonts/primeicons.woff'
 
+// PrimeVue组件
+import Dialog from 'primevue/dialog'
+import TabView from 'primevue/tabview'
+import TabPanel from 'primevue/tabpanel'
+import Accordion from 'primevue/accordion'
+import AccordionTab from 'primevue/accordiontab'
+import ProgressSpinner from 'primevue/progressspinner'
+
 const MyTheme = definePreset(Lara, {
     semantic: {
         primary: {

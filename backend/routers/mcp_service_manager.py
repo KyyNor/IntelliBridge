@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict
+from typing import Dict, List
 from models.mcp_service_model import McpService, McpServiceModel, ServiceStatus, CreationType
+from models.mcp_service_capability_model import McpServiceCapabilityModel
 from utils.db import DatabaseManager
 from utils.logger import log
 import datetime
@@ -14,6 +15,9 @@ def get_db_manager():
 
 def get_mcp_service_model(db_manager: DatabaseManager = Depends(get_db_manager)):
     return McpServiceModel(db_manager)
+
+def get_mcp_service_capability_model(db_manager: DatabaseManager = Depends(get_db_manager)):
+    return McpServiceCapabilityModel(db_manager)
 
 @router.post("/register")
 async def register_mcp_service(mcp_service_info: dict, mcp_service_model: McpServiceModel = Depends(get_mcp_service_model)):
@@ -84,3 +88,38 @@ async def list_services(mcp_service_model: McpServiceModel = Depends(get_mcp_ser
     mcp_services = mcp_service_model.list_mcp_services()
     log.debug(f"获取到 {len(mcp_services)} 个服务")
     return {"services": mcp_services}
+
+@router.get("/capabilities/{service_id}")
+async def get_service_capabilities(
+    service_id: int,
+    capability_model: McpServiceCapabilityModel = Depends(get_mcp_service_capability_model),
+    service_model: McpServiceModel = Depends(get_mcp_service_model)
+):
+    """
+    获取指定服务的能力列表
+    """
+    log.debug(f"获取服务 {service_id} 的能力列表")
+    
+    # 检查服务是否存在
+    service = service_model.get_service_by_id(service_id)
+    if not service:
+        log.error(f"获取服务能力失败：服务 {service_id} 不存在")
+        raise HTTPException(status_code=404, detail="Service not found")
+    
+    # 获取服务的能力列表
+    capabilities = capability_model.get_capabilities_by_service_id(service_id)
+    
+    # 将能力列表转换为字典列表
+    result = []
+    for cap in capabilities:
+        result.append({
+            "id": cap.id,
+            "name": cap.name,
+            "description": cap.description,
+            "cap_type": cap.cap_type,
+            "parameters": cap.parameters,
+            "created_tm": cap.created_tm
+        })
+    
+    log.debug(f"获取到服务 {service_id} 的 {len(result)} 个能力")
+    return {"capabilities": result}
