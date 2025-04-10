@@ -94,10 +94,8 @@
         </div>
       </form>
     </Dialog>
-    <div id="services-container" class="grid">
-      <div class="col-12 md:col-6 lg:col-4" v-for="service in services" :key="service.name">
-        <ServiceCard :service="service" @refreshServices="fetchServices" @editService="handleEditService" />
-      </div>
+    <div id="services-container">
+      <ServiceList :services="services" @refreshServices="fetchServices" @editService="handleEditService" />
     </div>
   </div>
 </template>
@@ -105,7 +103,7 @@
 <script>
 import { ref, onMounted } from 'vue'
 import axios from 'axios'
-import ServiceCard from './components/ServiceCard.vue'
+import ServiceList from './components/ServiceList.vue'
 import { API_CONFIG } from './config'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
@@ -115,7 +113,7 @@ import 'primeicons/primeicons.css'
 import 'primeflex/primeflex.css'
 
 export default {
-  components: { ServiceCard, Button, Dialog, InputText, InputNumber },
+  components: { ServiceList, Button, Dialog, InputText, InputNumber },
   setup() {
     const services = ref([])
     const newService = ref({
@@ -193,7 +191,8 @@ export default {
       updateService,
       handleEditService,
       showModal,
-      showEditModal 
+      showEditModal,
+      fetchServices 
     }
   }
 }

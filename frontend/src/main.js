@@ -15,6 +15,8 @@ import Accordion from 'primevue/accordion'
 import AccordionTab from 'primevue/accordiontab'
 import ProgressSpinner from 'primevue/progressspinner'
 
+import Tooltip from 'primevue/tooltip'
+
 const MyTheme = definePreset(Lara, {
     semantic: {
         primary: {
@@ -44,4 +46,5 @@ app.use(PrimeVue, {
         }
     }
 })
+app.directive('tooltip', Tooltip)
 app.mount('#app')
