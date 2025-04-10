@@ -3,7 +3,7 @@
     <div class="flex justify-content-between align-items-center mb-3">
       <h3 class="m-0">服务列表</h3>
       <div class="flex align-items-center">
-        <Dropdown v-model="rowsPerPage" :options="rowsPerPageOptions" optionLabel="label" 
+        <Select v-model="rowsPerPage" :options="rowsPerPageOptions" optionLabel="label" 
                   optionValue="value" class="mr-2" placeholder="每页显示" />
         <span class="text-sm text-500">共 {{ totalRecords }} 个服务</span>
       </div>
@@ -35,7 +35,7 @@
           <Tag :value="data.status" :severity="getStatusSeverity(data.status)" />
         </template>
         <template #filter="{filterModel, filterCallback}">
-          <Dropdown v-model="filterModel.value" @change="filterCallback()" :options="statusOptions" 
+          <Select v-model="filterModel.value" @change="filterCallback()" :options="statusOptions" 
                     placeholder="选择状态" class="p-column-filter" />
         </template>
       </Column>
@@ -87,52 +87,58 @@
       <p>该服务暂无能力信息，请先进行服务扫描</p>
       <Button label="扫描服务" icon="pi pi-sync" class="p-button-info p-button-rounded" @click="scanAndGetCapabilities" />
     </div>
-    <TabView v-else>
-      <TabPanel header="工具">
-        <Accordion :multiple="true" class="capability-accordion">
-          <AccordionTab v-for="cap in toolCapabilities" :key="cap.id" :header="cap.name">
-            <div class="grid">
-              <div class="col-12">
-                <div class="field">
-                  <label class="block text-sm font-medium text-500 mb-1">描述</label>
-                  <div class="text-900">{{ cap.description || 'N/A' }}</div>
+    <Tabs value="0">
+      <TabList>
+        <Tab value="0">工具</Tab>
+        <Tab value="1">资源</Tab>
+      </TabList>
+      <TabPanels>
+        <TabPanel value="0">
+            <Accordion :multiple="true" class="capability-accordion">
+            <AccordionPanel v-for="cap in toolCapabilities" :key="cap.id" :header="cap.name">
+                <div class="grid">
+                <div class="col-12">
+                    <div class="field">
+                    <label class="block text-sm font-medium text-500 mb-1">描述</label>
+                    <div class="text-900">{{ cap.description || 'N/A' }}</div>
+                    </div>
                 </div>
-              </div>
-              <div class="col-12" v-if="cap.parameters">
-                <div class="field">
-                  <label class="block text-sm font-medium text-500 mb-1">参数</label>
-                  <div class="text-900 parameters-container">
-                    <pre>{{ formatParameters(cap.parameters) }}</pre>
-                  </div>
+                <div class="col-12" v-if="cap.parameters">
+                    <div class="field">
+                    <label class="block text-sm font-medium text-500 mb-1">参数</label>
+                    <div class="text-900 parameters-container">
+                        <pre>{{ formatParameters(cap.parameters) }}</pre>
+                    </div>
+                    </div>
                 </div>
-              </div>
-            </div>
-          </AccordionTab>
-        </Accordion>
-      </TabPanel>
-      <TabPanel header="资源">
-        <Accordion :multiple="true" class="capability-accordion">
-          <AccordionTab v-for="cap in resourceCapabilities" :key="cap.id" :header="cap.name">
-            <div class="grid">
-              <div class="col-12">
-                <div class="field">
-                  <label class="block text-sm font-medium text-500 mb-1">描述</label>
-                  <div class="text-900">{{ cap.description || 'N/A' }}</div>
                 </div>
-              </div>
-              <div class="col-12" v-if="cap.parameters">
-                <div class="field">
-                  <label class="block text-sm font-medium text-500 mb-1">参数</label>
-                  <div class="text-900 parameters-container">
-                    <pre>{{ formatParameters(cap.parameters) }}</pre>
-                  </div>
+            </AccordionPanel>
+            </Accordion>
+        </TabPanel>
+        <TabPanel value="1">
+            <Accordion :multiple="true" class="capability-accordion">
+            <AccordionPanel v-for="cap in resourceCapabilities" :key="cap.id" :header="cap.name">
+                <div class="grid">
+                <div class="col-12">
+                    <div class="field">
+                    <label class="block text-sm font-medium text-500 mb-1">描述</label>
+                    <div class="text-900">{{ cap.description || 'N/A' }}</div>
+                    </div>
                 </div>
-              </div>
-            </div>
-          </AccordionTab>
-        </Accordion>
-      </TabPanel>
-    </TabView>
+                <div class="col-12" v-if="cap.parameters">
+                    <div class="field">
+                    <label class="block text-sm font-medium text-500 mb-1">参数</label>
+                    <div class="text-900 parameters-container">
+                        <pre>{{ formatParameters(cap.parameters) }}</pre>
+                    </div>
+                    </div>
+                </div>
+                </div>
+            </AccordionPanel>
+            </Accordion>
+        </TabPanel>
+      </TabPanels>
+    </Tabs>
   </Dialog>
   
   <!-- 删除确认对话框 -->
@@ -164,18 +170,21 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Tag from 'primevue/tag'
 import Dialog from 'primevue/dialog'
-import TabView from 'primevue/tabview'
-import TabPanel from 'primevue/tabpanel'
+import Tabs from 'primevue/tabs'
+import TabList from 'primevue/tablist';
+import Tab from 'primevue/tab';
+import TabPanels from 'primevue/tabpanels';
+import TabPanel from 'primevue/tabpanel';
 import Accordion from 'primevue/accordion'
-import AccordionTab from 'primevue/accordiontab'
+import AccordionPanel from 'primevue/accordionpanel'
 import ProgressSpinner from 'primevue/progressspinner'
-import Dropdown from 'primevue/dropdown'
+import Select from 'primevue/select'
 import InputText from 'primevue/inputtext'
 
 export default {
   components: { 
-    DataTable, Column, Button, Tag, Dialog, TabView, TabPanel, 
-    Accordion, AccordionTab, ProgressSpinner, Dropdown, InputText
+    DataTable, Column, Button, Tag, Dialog, Tabs, TabPanel, TabPanels, TabList, Tab,
+    Accordion, AccordionPanel, ProgressSpinner, Select, InputText
   },
   props: {
     services: {
