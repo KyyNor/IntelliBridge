@@ -59,6 +59,10 @@
                     class="p-button-primary p-button-sm p-button-rounded" 
                     @click="showCapabilities(data)">
             </Button>
+            <Button v-tooltip.top="'测试能力'" icon="pi pi-play" 
+                    class="p-button-success p-button-sm p-button-rounded" 
+                    @click="showCapabilityTester(data)">
+            </Button>
             <Button v-tooltip.top="'修改服务'" icon="pi pi-pencil" 
                     class="p-button-secondary p-button-sm p-button-rounded" 
                     @click="editService(data)">
@@ -180,11 +184,12 @@ import AccordionPanel from 'primevue/accordionpanel'
 import ProgressSpinner from 'primevue/progressspinner'
 import Select from 'primevue/select'
 import InputText from 'primevue/inputtext'
+import CapabilityTester from './CapabilityTester.vue'
 
 export default {
-  components: { 
-    DataTable, Column, Button, Tag, Dialog, Tabs, TabPanel, TabPanels, TabList, Tab,
-    Accordion, AccordionPanel, ProgressSpinner, Select, InputText
+  components: {
+    DataTable, Column, Button, Tag, Dialog, Tabs, TabList, Tab, TabPanels, TabPanel,
+    Accordion, AccordionPanel, ProgressSpinner, Select, InputText, CapabilityTester
   },
   props: {
     services: {
@@ -194,28 +199,21 @@ export default {
   },
   emits: ['refreshServices', 'editService'],
   setup(props, { emit }) {
+    const rowsPerPageOptions = ref([10, 20, 50])
+    const rowsPerPage = ref(10)
+    const totalRecords = ref(0)
+    const filters = ref({})
+    const statusOptions = ref(['online', 'offline', 'maintenance'])
     const capabilitiesDialog = ref(false)
     const capabilities = ref([])
     const loading = ref(false)
     const deleteConfirmDialog = ref(false)
     const serviceToDelete = ref(null)
+    const testerVisible = ref(false)
     const selectedService = ref(null)
     const currentService = ref(null)
-    const rowsPerPage = ref(10)
-    const rowsPerPageOptions = ref([
-      { label: '10条/页', value: 10 },
-      { label: '20条/页', value: 20 },
-      { label: '50条/页', value: 50 }
-    ])
-    const filters = ref({
-      'name': { value: null, matchMode: 'contains' },
-      'endpoint': { value: null, matchMode: 'contains' },
-      'status': { value: null, matchMode: 'equals' }
-    })
-    const statusOptions = ref(['online', 'offline', 'maintenance'])
     
-    const totalRecords = computed(() => props.services.length)
-    
+    // 计算属性
     const toolCapabilities = computed(() => {
       return capabilities.value.filter(cap => cap.cap_type === 'tool')
     })
@@ -224,6 +222,12 @@ export default {
       return capabilities.value.filter(cap => cap.cap_type === 'resource')
     })
     
+    // 监听服务列表变化，更新总记录数
+    watch(() => props.services, (newServices) => {
+      totalRecords.value = newServices.length
+    }, { immediate: true })
+    
+    // 方法
     const deleteService = (serviceId) => {
       serviceToDelete.value = serviceId
       selectedService.value = props.services.find(s => s.id === serviceId)
@@ -273,6 +277,11 @@ export default {
       fetchCapabilities(service.id)
     }
     
+    const showCapabilityTester = (service) => {
+      selectedService.value = service
+      testerVisible.value = true
+    }
+    
     const fetchCapabilities = async (serviceId) => {
       loading.value = true
       try {
@@ -308,18 +317,19 @@ export default {
     }
     
     return {
+      rowsPerPageOptions,
+      rowsPerPage,
+      totalRecords,
+      filters,
+      statusOptions,
       capabilitiesDialog,
       capabilities,
       loading,
       deleteConfirmDialog,
       serviceToDelete,
+      testerVisible,
       selectedService,
       currentService,
-      rowsPerPage,
-      rowsPerPageOptions,
-      filters,
-      statusOptions,
-      totalRecords,
       toolCapabilities,
       resourceCapabilities,
       deleteService,
@@ -329,6 +339,7 @@ export default {
       formatDateTime,
       getStatusSeverity,
       showCapabilities,
+      showCapabilityTester,
       fetchCapabilities,
       scanAndGetCapabilities,
       formatParameters
@@ -376,3 +387,6 @@ export default {
   margin-right: 0.5rem;
 }
 </style>
+
+<!-- 服务能力测试对话框 -->
+<CapabilityTester v-model:visible="testerVisible" :serviceId="selectedService?.id" />

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from routers import mcp_service_manager, mcp_service_scanner, mcp_service_proxy
+from routers import mcp_service_manager, mcp_service_scanner, mcp_service_proxy, mcp_service_tester
 from services.scheduler_manager import SchedulerManager
 from models.mcp_service_model import McpServiceModel
 from utils.db import DatabaseManager
@@ -52,6 +52,7 @@ log.info("已配置CORS中间件")
 app.include_router(mcp_service_manager.router)
 app.include_router(mcp_service_scanner.router)
 app.include_router(mcp_service_proxy.router)
+app.include_router(mcp_service_tester.router)
 log.info("已注册所有路由")
 
 # @app.on_event("startup")

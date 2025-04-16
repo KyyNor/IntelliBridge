@@ -37,6 +37,15 @@ class McpServiceCapabilityModel:
                 McpServiceCapability.service_id == service_id
             ).all()
 
+    def get_capability_by_id(self, capability_id: int) -> Optional[McpServiceCapability]:
+        """
+        根据能力ID查询单个能力
+        """
+        with self.db.get_session() as session:
+            return session.query(McpServiceCapability).filter(
+                McpServiceCapability.id == capability_id
+            ).first()
+
     def update_service_capabilities(self, service_id: int, capabilities: List[Dict]) -> List[McpServiceCapability]:
         """
         更新服务的工具和资源列表
