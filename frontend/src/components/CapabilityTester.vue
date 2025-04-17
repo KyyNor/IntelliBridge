@@ -1,5 +1,5 @@
 <template>
-  <Dialog v-model:visible="visible" modal header="测试MCP能力" :style="{ width: '60vw' }" class="p-fluid" :closeOnEscape="true" :dismissableMask="true">
+  <Dialog :visible="dialogVisible" modal header="测试MCP能力" :style="{ width: '60vw' }" class="p-fluid" :closeOnEscape="true" :dismissableMask="true" @update:visible="updateVisible">
     <div class="grid">
       <div class="col-12" v-if="loading">
         <div class="flex justify-content-center">
@@ -80,6 +80,26 @@ export default {
     const selectedCapability = ref(null);
     const parameters = ref({});
     const testResult = ref(null);
+    const dialogVisible = ref(false);
+    
+    // 监听props.visible变化，同步到内部状态
+    watch(() => props.visible, (newVal) => {
+      dialogVisible.value = newVal;
+      if (newVal) {
+        loadCapabilities();
+      } else {
+        // 重置状态
+        selectedCapability.value = null;
+        parameters.value = {};
+        testResult.value = null;
+      }
+    }, { immediate: true });
+    
+    // 更新visible状态并触发事件
+    const updateVisible = (newVal) => {
+      dialogVisible.value = newVal;
+      emit('update:visible', newVal);
+    };
     
     // 计算属性：参数schema
     const parametersSchema = computed(() => {
@@ -149,17 +169,7 @@ export default {
       emit('update:visible', false);
     };
     
-    // 监听对话框可见性变化，加载能力列表
-    watch(() => props.visible, (newVal) => {
-      if (newVal) {
-        loadCapabilities();
-      } else {
-        // 重置状态
-        selectedCapability.value = null;
-        parameters.value = {};
-        testResult.value = null;
-      }
-    });
+    // 删除原有的watch函数，因为已经在新的watch中处理了对话框可见性变化和加载能力列表的逻辑，并在return语句中添加新的dialogVisible和updateVisible变量
     
     return {
       loading,
@@ -171,7 +181,9 @@ export default {
       testResult,
       isRequired,
       testCapability,
-      close
+      close,
+      dialogVisible,
+      updateVisible
     };
   }
 };

@@ -98,30 +98,35 @@
       </TabList>
       <TabPanels>
         <TabPanel value="0">
-            <Accordion :multiple="true" class="capability-accordion">
-            <AccordionPanel v-for="cap in toolCapabilities" :key="cap.id" :header="cap.name">
-                <div class="grid">
-                <div class="col-12">
-                    <div class="field">
-                    <label class="block text-sm font-medium text-500 mb-1">描述</label>
-                    <div class="text-900">{{ cap.description || 'N/A' }}</div>
-                    </div>
-                </div>
-                <div class="col-12" v-if="cap.parameters">
-                    <div class="field">
-                    <label class="block text-sm font-medium text-500 mb-1">参数</label>
-                    <div class="text-900 parameters-container">
-                        <pre>{{ formatParameters(cap.parameters) }}</pre>
-                    </div>
-                    </div>
-                </div>
-                </div>
+            <Accordion value="0" class="capability-accordion">
+            <AccordionPanel v-for="(cap, index) in toolCapabilities" :key="cap.name" :value="cap.id">
+                <AccordionHeader>{{cap.name}}</AccordionHeader>
+                <AccordionContent>
+                  <div class="grid">
+                  <div class="col-12">
+                      <div class="field">
+                      <label class="block text-sm font-medium text-500 mb-1">描述</label>
+                      <div class="text-900">{{ cap.description || 'N/A' }}</div>
+                      </div>
+                  </div>
+                  <div class="col-12" v-if="cap.parameters">
+                      <div class="field">
+                      <label class="block text-sm font-medium text-500 mb-1">参数</label>
+                      <div class="text-900 parameters-container">
+                          <pre>{{ formatParameters(cap.parameters) }}</pre>
+                      </div>
+                      </div>
+                  </div>
+                  </div>
+                </AccordionContent>
             </AccordionPanel>
             </Accordion>
         </TabPanel>
         <TabPanel value="1">
             <Accordion :multiple="true" class="capability-accordion">
-            <AccordionPanel v-for="cap in resourceCapabilities" :key="cap.id" :header="cap.name">
+            <AccordionPanel v-for="(cap, index) in resourceCapabilities" :key="cap.name" :value="cap.id">
+              <AccordionHeader>{{cap.name}}</AccordionHeader>
+              <AccordionContent>
                 <div class="grid">
                 <div class="col-12">
                     <div class="field">
@@ -138,6 +143,7 @@
                     </div>
                 </div>
                 </div>
+              </AccordionContent>
             </AccordionPanel>
             </Accordion>
         </TabPanel>
@@ -163,11 +169,14 @@
       </div>
     </template>
   </Dialog>
+  
+  <!-- 服务能力测试对话框 -->
+  <CapabilityTester v-model:visible="testerVisible" :serviceId="selectedService?.id" />
 </template>
 
 <script>
 import axios from 'axios'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { API_CONFIG } from '../config'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -181,6 +190,8 @@ import TabPanels from 'primevue/tabpanels';
 import TabPanel from 'primevue/tabpanel';
 import Accordion from 'primevue/accordion'
 import AccordionPanel from 'primevue/accordionpanel'
+import AccordionHeader from 'primevue/accordionheader'
+import AccordionContent from 'primevue/accordioncontent'
 import ProgressSpinner from 'primevue/progressspinner'
 import Select from 'primevue/select'
 import InputText from 'primevue/inputtext'
@@ -189,7 +200,8 @@ import CapabilityTester from './CapabilityTester.vue'
 export default {
   components: {
     DataTable, Column, Button, Tag, Dialog, Tabs, TabList, Tab, TabPanels, TabPanel,
-    Accordion, AccordionPanel, ProgressSpinner, Select, InputText, CapabilityTester
+    Accordion, AccordionPanel, AccordionHeader, AccordionContent, ProgressSpinner, 
+    Select, InputText, CapabilityTester
   },
   props: {
     services: {
@@ -387,6 +399,3 @@ export default {
   margin-right: 0.5rem;
 }
 </style>
-
-<!-- 服务能力测试对话框 -->
-<CapabilityTester v-model:visible="testerVisible" :serviceId="selectedService?.id" />
