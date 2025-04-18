@@ -59,8 +59,20 @@
 <script>
 import { ref, computed, watch } from 'vue';
 import axios from 'axios';
+import Select from 'primevue/select'
+import InputText from 'primevue/inputtext'
+import InputNumber from 'primevue/inputnumber'
+import Dialog from 'primevue/dialog'
+import Button from 'primevue/button'
+import ProgressSpinner from 'primevue/progressspinner'
+import Checkbox from 'primevue/checkbox'
+import Textarea from 'primevue/textarea'
 
 export default {
+  components: {
+    Button, Dialog, ProgressSpinner, Checkbox, Textarea,
+    Select, InputText, InputNumber
+  },
   name: 'CapabilityTester',
   props: {
     visible: {

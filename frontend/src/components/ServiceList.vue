@@ -73,7 +73,7 @@
             </Button>
             <Button v-tooltip.top="'删除服务'" icon="pi pi-trash" 
                     class="p-button-danger p-button-sm p-button-rounded" 
-                    @click="deleteService(data.id)">
+                    @click="deleteService(data)">
             </Button>
           </div>
         </template>
@@ -171,7 +171,7 @@
   </Dialog>
   
   <!-- 服务能力测试对话框 -->
-  <CapabilityTester v-model:visible="testerVisible" :serviceId="selectedService?.id" />
+  <CapabilityTester v-model:visible="testerVisible" :serviceId="selectedService.id" />
 </template>
 
 <script>
@@ -220,10 +220,8 @@ export default {
     const capabilities = ref([])
     const loading = ref(false)
     const deleteConfirmDialog = ref(false)
-    const serviceToDelete = ref(null)
     const testerVisible = ref(false)
-    const selectedService = ref(null)
-    const currentService = ref(null)
+    const selectedService = ref(0)
     
     // 计算属性
     const toolCapabilities = computed(() => {
@@ -240,15 +238,15 @@ export default {
     }, { immediate: true })
     
     // 方法
-    const deleteService = (serviceId) => {
-      serviceToDelete.value = serviceId
-      selectedService.value = props.services.find(s => s.id === serviceId)
+    const deleteService = (service) => {
+      selectedService.value = service
+      // selectedService.value = props.services.find(s => s.id === serviceId)
       deleteConfirmDialog.value = true
     }
     
     const confirmDelete = async () => {
       try {
-        await axios.delete(`${API_CONFIG.baseUrl}/api/mcp_service_manager/delete/${serviceToDelete.value}`)
+        await axios.delete(`${API_CONFIG.baseUrl}/api/mcp_service_manager/delete/${selectedService.value}`)
         deleteConfirmDialog.value = false
         emit('refreshServices')
       } catch (error) {
@@ -284,7 +282,7 @@ export default {
     }
     
     const showCapabilities = (service) => {
-      currentService.value = service
+      selectedService.value = service
       capabilitiesDialog.value = true
       fetchCapabilities(service.id)
     }
@@ -307,11 +305,11 @@ export default {
     }
     
     const scanAndGetCapabilities = async () => {
-      if (!currentService.value) return
+      if (!selectedService.value) return
       
       try {
-        await axios.post(`${API_CONFIG.baseUrl}/api/mcp_service_scanner/scan/${currentService.value.id}`)
-        await fetchCapabilities(currentService.value.id)
+        await axios.post(`${API_CONFIG.baseUrl}/api/mcp_service_scanner/scan/${selectedService.value.id}`)
+        await fetchCapabilities(selectedService.value.id)
         emit('refreshServices')
       } catch (error) {
         console.error('Error scanning service:', error)
@@ -338,10 +336,8 @@ export default {
       capabilities,
       loading,
       deleteConfirmDialog,
-      serviceToDelete,
       testerVisible,
       selectedService,
-      currentService,
       toolCapabilities,
       resourceCapabilities,
       deleteService,

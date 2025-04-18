@@ -51,8 +51,8 @@ log.info("已配置CORS中间件")
 # 注册路由
 app.include_router(mcp_service_manager.router)
 app.include_router(mcp_service_scanner.router)
-app.include_router(mcp_service_proxy.router)
 app.include_router(mcp_service_tester.router)
+app.include_router(mcp_service_proxy.router)
 log.info("已注册所有路由")
 
 # @app.on_event("startup")
