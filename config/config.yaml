@@ -1,1 +1,8 @@
 # IntelliBridge 配置文件
+
+# Hive 连接配置
+hive:
+  host: "localhost"
+  port: 10000
+  username: "hive"
+  database: "default"
