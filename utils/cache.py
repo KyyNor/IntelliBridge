@@ -76,6 +76,54 @@ class CacheManager:
         """获取原始 Cache 实例"""
         return self._cache
 
+    def cache_it(self, expire: Optional[int] = None, key: Optional[str] = None):
+        """
+        缓存装饰器
+
+        Args:
+            expire: 过期时间（秒），None 表示不过期
+            key: 自定义缓存键，None 表示使用函数名和参数
+
+        Returns:
+            装饰器函数
+
+        使用示例:
+            @cache.cache_it()
+            def expensive_function(x):
+                return x * x
+
+            @cache.cache_it(expire=60)
+            def temp_function(x):
+                return x + 1
+
+            @cache.cache_it(key="custom_key")
+            def custom_function():
+                return "result"
+        """
+        def decorator(func):
+            def wrapper(*args, **kwargs):
+                # 生成缓存键
+                if key is not None:
+                    cache_key = key
+                else:
+                    # 使用函数名和参数生成键
+                    import hashlib
+                    params_str = f"{func.__name__}{args}{kwargs}"
+                    cache_key = f"{func.__name__}:{hashlib.md5(params_str.encode()).hexdigest()}"
+
+                # 尝试从缓存获取
+                cached_value = self.get(cache_key)
+                if cached_value is not None:
+                    return cached_value
+
+                # 执行函数并缓存结果
+                result = func(*args, **kwargs)
+                self.set(cache_key, result, expire=expire)
+                return result
+
+            return wrapper
+        return decorator
+
 
 # 默认缓存实例
 cache = CacheManager()
