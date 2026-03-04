@@ -1,14 +1,14 @@
-version: '3.8'
-
 services:
-  intelli_bridge:
+  app:
     build: .
+    container_name: intellibridge
     ports:
       - "8000:8000"
     environment:
-      - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
+    restart: unless-stopped
     volumes:
-      - ./backend:/app/backend
-      - ./frontend:/app/frontend
-    restart: unless-stopped 
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - ./cache:/app/cache
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
