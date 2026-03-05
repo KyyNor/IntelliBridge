@@ -7,6 +7,7 @@ from fastmcp import FastMCP
 
 from utils.config import config
 from utils.logger import logger
+from utils.decorators import log_function_info
 
 # 创建路由（单接口直接挂在 /api 下）
 router = APIRouter(tags=["Agent"])
@@ -187,6 +188,7 @@ async def execute_agent_browser(request: AgentBrowserRequest):
 
 # MCP 工具
 @mcp.tool()
+@log_function_info
 def agent_browser_tool(session_name: str, command: str) -> str:
     """
     执行 Agent Browser 命令

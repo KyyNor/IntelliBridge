@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from utils.hive_pool import hive_pool
 from utils.logger import logger
 from utils.cache import cache
+from utils.decorators import log_function_info
 
 # 创建路由
 router = APIRouter(prefix="/api/hive", tags=["Hive"])
@@ -288,6 +289,7 @@ async def query_hive_data(request: QueryRequest):
 
 # MCP 工具
 @mcp.tool()
+@log_function_info
 def hive_describe(table_name: str) -> str:
     """
     查看 Hive 表结构
@@ -302,6 +304,7 @@ def hive_describe(table_name: str) -> str:
 
 
 @mcp.tool()
+@log_function_info
 def hive_query_tool(sql: str, limit: int = 10) -> str:
     """
     查询 Hive 数据
