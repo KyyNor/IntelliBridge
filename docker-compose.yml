@@ -3,7 +3,7 @@ services:
     build: .
     container_name: intellibridge
     ports:
-      - "8000:8000"
+      - "49000:49000"
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
@@ -11,4 +11,4 @@ services:
       - ./logs:/app/logs
       - ./config:/app/config
       - ./cache:/app/cache
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn main:app --host 0.0.0.0 --port 49000 --reload

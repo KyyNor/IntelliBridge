@@ -3,12 +3,16 @@ import re
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
+from fastmcp import FastMCP
 
 from utils.config import config
 from utils.logger import logger
 
 # 创建路由（单接口直接挂在 /api 下）
 router = APIRouter(tags=["Agent"])
+
+# 创建 MCP 服务器
+mcp = FastMCP("intellibridge-agent-browser")
 
 
 # 请求模型
@@ -179,3 +183,19 @@ async def execute_agent_browser(request: AgentBrowserRequest):
     """执行 Agent Browser 命令"""
     result = agent_browser.execute(request.session_name, request.command)
     return {"data": result}
+
+
+# MCP 工具
+@mcp.tool()
+def agent_browser_tool(session_name: str, command: str) -> str:
+    """
+    执行 Agent Browser 命令
+
+    Args:
+        session_name: 会话名称
+        command: 命令
+
+    Returns:
+        命令执行结果
+    """
+    return agent_browser.execute(session_name, command)

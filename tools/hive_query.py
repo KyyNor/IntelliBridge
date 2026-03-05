@@ -5,6 +5,7 @@ import sqlglot
 from typing import Optional, List, Tuple
 from fastapi import APIRouter
 from pydantic import BaseModel
+from fastmcp import FastMCP
 
 from utils.hive_pool import hive_pool
 from utils.logger import logger
@@ -12,6 +13,9 @@ from utils.cache import cache
 
 # 创建路由
 router = APIRouter(prefix="/api/hive", tags=["Hive"])
+
+# 创建 MCP 服务器
+mcp = FastMCP("intellibridge-hive")
 
 
 # 请求模型
@@ -275,3 +279,33 @@ async def query_hive_data(request: QueryRequest):
     """查询 Hive 数据"""
     result = hive_query.query_data(request.sql, request.limit)
     return {"data": result}
+
+
+# MCP 工具
+@mcp.tool()
+def hive_describe(table_name: str) -> str:
+    """
+    查看 Hive 表结构
+
+    Args:
+        table_name: 表名，格式为 "库名.表名"
+
+    Returns:
+        CSV 格式的表结构数据
+    """
+    return hive_query.describe_table(table_name)
+
+
+@mcp.tool()
+def hive_query_tool(sql: str, limit: int = 10) -> str:
+    """
+    查询 Hive 数据
+
+    Args:
+        sql: 查询 SQL 语句
+        limit: 返回数据条数，默认10，最多1000
+
+    Returns:
+        CSV 格式的查询结果
+    """
+    return hive_query.query_data(sql, limit)
