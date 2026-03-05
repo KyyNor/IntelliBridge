@@ -5,19 +5,15 @@ import sqlglot
 from typing import Optional, List, Tuple
 from fastapi import APIRouter
 from pydantic import BaseModel
-from fastmcp import FastMCP
 
 from utils.hive_pool import hive_pool
 from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
+from utils.mcp import mcp
 
 # 创建路由
 router = APIRouter(prefix="/api/hive", tags=["Hive"])
-
-# 创建 MCP 服务器
-mcp = FastMCP("intellibridge-hive")
-
 
 # 请求模型
 class DescribeRequest(BaseModel):

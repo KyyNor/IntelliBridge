@@ -1,8 +1,12 @@
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 
 from tools.hive_query import router as hive_router
 from tools.agent_browser import router as agent_browser_router
+from utils.mcp import mcp
+from utils.logger import logger
 
 app = FastAPI(
     title="IntelliBridge API",
@@ -35,6 +39,32 @@ app.include_router(hive_router)
 app.include_router(agent_browser_router)
 
 
+async def run_fastapi():
+    """运行 FastAPI 服务器"""
+    config = uvicorn.Config(app, host="0.0.0.0", port=49000, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
+async def run_mcp():
+    """运行 MCP 服务器"""
+    await mcp.run_http_async(port=49001)
+
+
+async def main():
+    """同时运行 FastAPI 和 MCP 服务器"""
+    logger.info("Starting IntelliBridge servers...")
+    logger.info(f"FastAPI server: http://0.0.0.0:49000")
+    logger.info(f"MCP server: http://0.0.0.0:49001")
+
+    try:
+        await asyncio.gather(
+            run_fastapi(),
+            run_mcp()
+        )
+    except KeyboardInterrupt:
+        logger.info("Shutting down servers...")
+
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=49000)
+    asyncio.run(main())

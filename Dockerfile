@@ -7,13 +7,13 @@ COPY requirements.txt .
 
 # Install dependencies without cache and use pip's cache mounting
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Expose port
-EXPOSE 49000
+# Expose ports
+EXPOSE 49000 49001
 
 # Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "49000"]
+CMD ["python", "main.py"]
