@@ -6,3 +6,7 @@ hive:
   port: 10000
   username: "hive"
   database: "default"
+
+# Agent Browser 配置
+agent_browser:
+  cdp_port: 9222
