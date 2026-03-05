@@ -3,9 +3,25 @@ import re
 import hashlib
 import sqlglot
 from typing import Optional, List, Tuple
+from fastapi import APIRouter
+from pydantic import BaseModel
+
 from utils.hive_pool import hive_pool
 from utils.logger import logger
 from utils.cache import cache
+
+# 创建路由
+router = APIRouter(prefix="/api/hive", tags=["Hive"])
+
+
+# 请求模型
+class DescribeRequest(BaseModel):
+    table_name: str
+
+
+class QueryRequest(BaseModel):
+    sql: str
+    limit: Optional[int] = 10
 
 
 class HiveQuery:
@@ -244,3 +260,18 @@ class HiveQuery:
 
 # 默认实例
 hive_query = HiveQuery()
+
+
+# API 路由
+@router.post("/describe")
+async def describe_table(request: DescribeRequest):
+    """查看 Hive 表结构"""
+    result = hive_query.describe_table(request.table_name)
+    return {"data": result}
+
+
+@router.post("/query")
+async def query_hive_data(request: QueryRequest):
+    """查询 Hive 数据"""
+    result = hive_query.query_data(request.sql, request.limit)
+    return {"data": result}

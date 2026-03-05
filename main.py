@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from tools.hive_query import router as hive_router
+from tools.agent_browser import router as agent_browser_router
+
 app = FastAPI(
     title="IntelliBridge API",
     description="IntelliBridge Backend Service",
@@ -25,6 +28,11 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+# 注册路由
+app.include_router(hive_router)
+app.include_router(agent_browser_router)
 
 
 if __name__ == "__main__":
