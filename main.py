@@ -48,7 +48,7 @@ async def run_fastapi():
 
 async def run_mcp():
     """运行 MCP 服务器"""
-    await mcp.run_http_async(port=49001)
+    await mcp.run_http_async(transport="streamable-http", host="0.0.0.0", port=49001, log_level="info")
 
 
 async def main():
