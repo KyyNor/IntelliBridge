@@ -35,7 +35,7 @@ class HiveQuery:
     ALLOWED_DB = "hxb_dh_data_dim"
 
     # 必须包含的过滤条件字段
-    REQUIRED_FILTER_FIELDS = ["etl_data", "cdate"]
+    REQUIRED_FILTER_FIELDS = ["etl_date", "cdate"]
 
     def __init__(self):
         """初始化查询工具"""
@@ -43,7 +43,7 @@ class HiveQuery:
 
     def _get_connection(self) -> hive.Connection:
         """获取 Hive 连接"""
-        if self.conn is None or self.conn.closed:
+        if self.conn is None:
             self.conn = hive_pool.get_connection()
         return self.conn
 
@@ -257,9 +257,14 @@ class HiveQuery:
 
     def close(self):
         """关闭连接"""
-        if self.conn and not self.conn.closed:
-            self.conn.close()
-            logger.info("查询连接已关闭")
+        if self.conn:
+            try:
+                self.conn.close()
+                logger.info("查询连接已关闭")
+            except Exception as e:
+                logger.warning(f"关闭查询连接时出错: {e}")
+            finally:
+                self.conn = None
 
 
 # 默认实例

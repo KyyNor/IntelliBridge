@@ -22,7 +22,7 @@ class HiveConnectionPool:
         Returns:
             Hive 连接对象
         """
-        if self._connection is None or self._connection.closed:
+        if self._connection is None:
             try:
                 logger.info(f"正在连接 Hive: {self.host}:{self.port}")
                 self._connection = hive.Connection(
@@ -40,9 +40,14 @@ class HiveConnectionPool:
 
     def close(self):
         """关闭连接"""
-        if self._connection and not self._connection.closed:
-            self._connection.close()
-            logger.info("Hive 连接已关闭")
+        if self._connection:
+            try:
+                self._connection.close()
+                logger.info("Hive 连接已关闭")
+            except Exception as e:
+                logger.warning(f"关闭连接时出错: {e}")
+            finally:
+                self._connection = None
 
 
 # 默认连接池实例
