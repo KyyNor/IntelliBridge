@@ -1,8 +1,11 @@
 from pyhive import hive
 import re
+import hashlib
+import sqlglot
 from typing import Optional, List, Tuple
 from utils.hive_pool import hive_pool
 from utils.logger import logger
+from utils.cache import cache
 
 
 class HiveQuery:
@@ -23,6 +26,38 @@ class HiveQuery:
         if self.conn is None or self.conn.closed:
             self.conn = hive_pool.get_connection()
         return self.conn
+
+    def _normalize_sql(self, sql: str) -> str:
+        """
+        标准化 SQL：转大写并格式化
+
+        Args:
+            sql: 原始 SQL 语句
+
+        Returns:
+            标准化后的 SQL 语句
+        """
+        try:
+            # 使用 sqlglot 格式化 SQL
+            formatted = sqlglot.parse_one(sql, dialect='hive').sql(dialect='hive')
+            # 转大写
+            normalized = formatted.upper()
+            return normalized
+        except Exception as e:
+            logger.warning(f"SQL 格式化失败，使用原始 SQL: {e}")
+            return sql.upper()
+
+    def _get_sql_hash(self, sql: str) -> str:
+        """
+        计算 SQL 的哈希值
+
+        Args:
+            sql: SQL 语句
+
+        Returns:
+            MD5 哈希值
+        """
+        return hashlib.md5(sql.encode('utf-8')).hexdigest()
 
     def describe_table(self, table_full_name: str) -> str:
         """
@@ -95,20 +130,35 @@ class HiveQuery:
             # 限制返回条数
             limit = max(1, min(limit, 1000))
 
-            # 检查表名和过滤条件
+            # 标准化 SQL（转大写并格式化）
+            normalized_sql = self._normalize_sql(sql)
+
+            # 检查表名和过滤条件（使用原始 SQL）
             check_result = self._check_sql_filter(sql)
             if check_result != "ok":
                 return check_result
 
+            # 添加 LIMIT 限制到标准化 SQL
+            final_sql = normalized_sql
+            if not re.search(r"\bLIMIT\s+\d+", normalized_sql, re.IGNORECASE):
+                final_sql = f"{normalized_sql} LIMIT {limit}"
+
+            # 计算 SQL 哈希
+            sql_hash = self._get_sql_hash(final_sql)
+            cache_key = f"hive_query:{sql_hash}"
+
+            # 尝试从缓存获取结果
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                logger.info(f"从缓存获取查询结果: {sql_hash[:8]}...")
+                return cached_result
+
+            # 执行查询
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            # 添加 LIMIT 限制
-            if not re.search(r"\bLIMIT\s+\d+", sql, re.IGNORECASE):
-                sql = f"{sql} LIMIT {limit}"
-
-            logger.info(f"执行查询: {sql}")
-            cursor.execute(sql)
+            logger.info(f"执行查询: {final_sql}")
+            cursor.execute(final_sql)
 
             # 获取结果
             results = cursor.fetchall()
@@ -134,8 +184,13 @@ class HiveQuery:
                         row_str.append(str(item))
                 output.append(",".join(row_str))
 
+            result = "\n".join(output)
+
+            # 缓存结果（1小时过期）
+            cache.set(cache_key, result, expire=3600)
+
             logger.info(f"查询成功，返回 {len(results)} 条数据")
-            return "\n".join(output)
+            return result
 
         except Exception as e:
             error_msg = f"查询失败: {str(e)}"
