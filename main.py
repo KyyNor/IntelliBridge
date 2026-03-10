@@ -5,6 +5,7 @@ import uvicorn
 
 from tools.hive_query import router as hive_router
 from tools.agent_browser import router as agent_browser_router
+from tools.mysql_query import router as mysql_router
 from utils.mcp import mcp
 from utils.logger import logger
 
@@ -37,6 +38,7 @@ async def health_check():
 # 注册路由
 app.include_router(hive_router)
 app.include_router(agent_browser_router)
+app.include_router(mysql_router)
 
 
 async def run_fastapi():

@@ -10,3 +10,15 @@ hive:
 # Agent Browser 配置
 agent_browser:
   cdp_port: 9222
+
+# MySQL 连接配置
+mysql:
+  nodes:
+    - name: local_node
+      host: "localhost"
+      port: 3306
+      username: "intellibridge"
+      password: "intellibridge_password"
+      charset: "utf8mb4"
+      databases:
+        - intellibridge
