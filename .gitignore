@@ -140,6 +140,10 @@ cython_debug/
 # Node.js
 node_modules/
 
+# Build artifacts
+build/*.tar.xz
+.build.env
+
 .idea/
 
 intelli_bridge.db
