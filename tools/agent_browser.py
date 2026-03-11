@@ -1,5 +1,6 @@
 import subprocess
 import re
+import hashlib
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -25,6 +26,23 @@ class AgentBrowser:
         """初始化 Agent Browser 工具"""
         self.cdp_port = config.get("agent_browser.cdp_port", 9222)
 
+    def _convert_session_name(self, session_name: str) -> str:
+        """
+        将 session_name 转换为安全的英文标识
+
+        Args:
+            session_name: 原始 session 名称
+
+        Returns:
+            转换后的英文标识
+        """
+        # 检查是否包含非 ASCII 字符
+        if not session_name.isascii():
+            # 使用 MD5 哈希转换
+            hash_obj = hashlib.md5(session_name.encode('utf-8'))
+            return f"session_{hash_obj.hexdigest()[:12]}"
+        return session_name
+
     def execute(self, session_name: str, command: str) -> str:
         """
         执行 agent-browser 命令
@@ -40,6 +58,9 @@ class AgentBrowser:
             # 参数校验
             if not session_name or not session_name.strip():
                 return "错误: session_name 不能为空"
+
+            # 转换中文 session_name 为英文
+            session_name = self._convert_session_name(session_name)
 
             command = command.strip()
             if not command:
