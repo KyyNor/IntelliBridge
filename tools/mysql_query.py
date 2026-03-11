@@ -107,32 +107,32 @@ class MySQLQuery:
                 logger.info(f"从缓存获取表列表: {database}")
                 return cached_result
 
-            conn = mysql_pool.get_connection(database)
-            cursor = conn.cursor()
+            with mysql_pool.get_connection(database) as conn:
+                cursor = conn.cursor()
 
-            # 构建查询SQL
-            if keyword:
-                # 模糊匹配表名或表注释
-                sql = """
-                    SELECT TABLE_NAME, TABLE_COMMENT
-                    FROM information_schema.TABLES
-                    WHERE TABLE_SCHEMA = %s
-                    AND (TABLE_NAME LIKE %s OR TABLE_COMMENT LIKE %s)
-                    ORDER BY TABLE_NAME
-                """
-                like_pattern = f"%{keyword}%"
-                cursor.execute(sql, (database, like_pattern, like_pattern))
-            else:
-                # 获取所有表
-                sql = """
-                    SELECT TABLE_NAME, TABLE_COMMENT
-                    FROM information_schema.TABLES
-                    WHERE TABLE_SCHEMA = %s
-                    ORDER BY TABLE_NAME
-                """
-                cursor.execute(sql, (database,))
+                # 构建查询SQL
+                if keyword:
+                    # 模糊匹配表名或表注释
+                    sql = """
+                        SELECT TABLE_NAME, TABLE_COMMENT
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = %s
+                        AND (TABLE_NAME LIKE %s OR TABLE_COMMENT LIKE %s)
+                        ORDER BY TABLE_NAME
+                    """
+                    like_pattern = f"%{keyword}%"
+                    cursor.execute(sql, (database, like_pattern, like_pattern))
+                else:
+                    # 获取所有表
+                    sql = """
+                        SELECT TABLE_NAME, TABLE_COMMENT
+                        FROM information_schema.TABLES
+                        WHERE TABLE_SCHEMA = %s
+                        ORDER BY TABLE_NAME
+                    """
+                    cursor.execute(sql, (database,))
 
-            results = cursor.fetchall()
+                results = cursor.fetchall()
 
             if not results:
                 return f"数据库 {database} 中未找到表"
@@ -188,24 +188,24 @@ class MySQLQuery:
                 logger.info(f"从缓存获取表结构: {database}.{table_name}")
                 return cached_result
 
-            conn = mysql_pool.get_connection(database)
-            cursor = conn.cursor()
+            with mysql_pool.get_connection(database) as conn:
+                cursor = conn.cursor()
 
-            # 查询表结构
-            sql = """
-                SELECT
-                    COLUMN_NAME,
-                    COLUMN_TYPE,
-                    IS_NULLABLE,
-                    COLUMN_KEY,
-                    COLUMN_DEFAULT,
-                    COLUMN_COMMENT
-                FROM information_schema.COLUMNS
-                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
-                ORDER BY ORDINAL_POSITION
-            """
-            cursor.execute(sql, (database, table_name))
-            results = cursor.fetchall()
+                # 查询表结构
+                sql = """
+                    SELECT
+                        COLUMN_NAME,
+                        COLUMN_TYPE,
+                        IS_NULLABLE,
+                        COLUMN_KEY,
+                        COLUMN_DEFAULT,
+                        COLUMN_COMMENT
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+                    ORDER BY ORDINAL_POSITION
+                """
+                cursor.execute(sql, (database, table_name))
+                results = cursor.fetchall()
 
             if not results:
                 return f"错误: 表 {database}.{table_name} 不存在或无数据"
@@ -297,36 +297,36 @@ class MySQLQuery:
                 return cached_result
 
             # 执行查询
-            conn = mysql_pool.get_connection(database)
-            cursor = conn.cursor()
+            with mysql_pool.get_connection(database) as conn:
+                cursor = conn.cursor()
 
-            logger.info(f"执行查询: {final_sql}")
-            cursor.execute(final_sql)
+                logger.info(f"执行查询: {final_sql}")
+                cursor.execute(final_sql)
 
-            # 获取结果
-            results = cursor.fetchall()
-            if not results:
-                return "查询结果为空"
+                # 获取结果
+                results = cursor.fetchall()
+                if not results:
+                    return "查询结果为空"
 
-            # 获取列名
-            columns = [desc[0] for desc in cursor.description]
+                # 获取列名
+                columns = [desc[0] for desc in cursor.description]
 
-            # 转换为 CSV 格式
-            output = []
-            output.append(",".join(columns))
-            for row in results:
-                # 处理 None 值和包含逗号的字段
-                row_str = []
-                for item in row:
-                    if item is None:
-                        row_str.append("")
-                    elif isinstance(item, str) and ("," in item or "\n" in item):
-                        row_str.append(f'"{item}"')
-                    else:
-                        row_str.append(str(item))
-                output.append(",".join(row_str))
+                # 转换为 CSV 格式
+                output = []
+                output.append(",".join(columns))
+                for row in results:
+                    # 处理 None 值和包含逗号的字段
+                    row_str = []
+                    for item in row:
+                        if item is None:
+                            row_str.append("")
+                        elif isinstance(item, str) and ("," in item or "\n" in item):
+                            row_str.append(f'"{item}"')
+                        else:
+                            row_str.append(str(item))
+                    output.append(",".join(row_str))
 
-            result = "\n".join(output)
+                result = "\n".join(output)
 
             # 缓存5分钟
             cache.set(cache_key, result, expire=300)
@@ -437,18 +437,18 @@ class MySQLQuery:
             if cached is not None:
                 return cached
 
-            conn = mysql_pool.get_connection(database)
-            cursor = conn.cursor()
+            with mysql_pool.get_connection(database) as conn:
+                cursor = conn.cursor()
 
-            sql = """
-                SELECT COUNT(*) as cnt
-                FROM information_schema.TABLES
-                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
-            """
-            cursor.execute(sql, (database, table_name.strip('`"[]')))
-            result = cursor.fetchone()
+                sql = """
+                    SELECT COUNT(*) as cnt
+                    FROM information_schema.TABLES
+                    WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+                """
+                cursor.execute(sql, (database, table_name.strip('`"[]')))
+                result = cursor.fetchone()
 
-            exists = result['cnt'] > 0 if result else False
+                exists = result['cnt'] > 0 if result else False
 
             # 缓存30分钟
             cache.set(cache_key, exists, expire=1800)
