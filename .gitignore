@@ -142,6 +142,7 @@ node_modules/
 
 # Build artifacts
 build/*.tar.xz
+build/node-v*-linux-x64/
 .build.env
 
 .idea/

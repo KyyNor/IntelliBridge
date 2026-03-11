@@ -9,6 +9,7 @@ __pycache__
 dist
 build/*
 !build/*.tar.xz
+!build/node-v*-linux-x64/
 .git
 .gitignore
 .vscode

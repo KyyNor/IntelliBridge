@@ -3,17 +3,17 @@ FROM python:3.12-slim
 # 引入构建参数（支持内网镜像源）
 ARG PYTHON_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG NODE_VERSION=24.1.0
 
 WORKDIR /app
 
-# 安装 xz 工具并复制 Node.js 二进制包
-# 内网部署时：将下载好的 Node.js tar.gz 包放在 build/ 目录
-# 下载地址：https://mirrors.aliyun.com/nodejs-release/v24.1.0/node-v24.1.0-linux-x64.tar.xz
-RUN apt-get update && apt-get install -y xz-utils && rm -rf /var/lib/apt/lists/*
-COPY build/node-v24.1.0-linux-x64.tar.xz /tmp/
-RUN tar -xf /tmp/node-*.tar.xz -C /usr/local --strip-components=1 && \
-    rm /tmp/node-*.tar.xz && \
-    node --version && npm --version
+# 复制预解压的 Node.js 目录
+# build.sh 脚本会先解压 Node.js 压缩包到 build/node-v{VERSION}-linux-x64/
+# 这样可以避免在容器内安装 xz-utils（内网可能无 apt 源）
+COPY build/node-v${NODE_VERSION}-linux-x64/ /usr/local/
+
+# 验证 Node.js 版本
+RUN node --version && npm --version
 
 # 设置 npm 镜像源
 RUN npm config set registry ${NPM_REGISTRY}
