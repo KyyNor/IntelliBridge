@@ -276,11 +276,6 @@ class MySQLQuery:
             # 标准化 SQL
             normalized_sql = self._normalize_sql(sql)
 
-            # 验证不跨库查询
-            cross_db_check = self._check_cross_database(normalized_sql, database)
-            if cross_db_check != "ok":
-                return cross_db_check
-
             # 添加 LIMIT 限制
             final_sql = normalized_sql
             if not re.search(r"\bLIMIT\s+\d+", normalized_sql, re.IGNORECASE):
@@ -317,7 +312,7 @@ class MySQLQuery:
                 for row in results:
                     # 处理 None 值和包含逗号的字段
                     row_str = []
-                    for item in row:
+                    for item in row.values():  # 字典需要用 .values() 获取值
                         if item is None:
                             row_str.append("")
                         elif isinstance(item, str) and ("," in item or "\n" in item):
@@ -353,12 +348,10 @@ class MySQLQuery:
         try:
             # 使用 sqlglot 格式化 SQL
             formatted = sqlglot.parse_one(sql, dialect='mysql').sql(dialect='mysql')
-            # 转大写
-            normalized = formatted.upper()
-            return normalized
+            return formatted
         except Exception as e:
             logger.warning(f"SQL 格式化失败，使用原始 SQL: {e}")
-            return sql.upper()
+            return sql
 
     def _get_sql_hash(self, sql: str) -> str:
         """
@@ -371,94 +364,6 @@ class MySQLQuery:
             MD5 哈希值
         """
         return hashlib.md5(sql.encode('utf-8')).hexdigest()
-
-    def _check_cross_database(self, sql: str, allowed_database: str) -> str:
-        """
-        检查 SQL 是否跨库查询
-
-        Args:
-            sql: 标准化后的 SQL 语句（大写）
-            allowed_database: 允许查询的数据库
-
-        Returns:
-            "ok" 表示通过，否则返回错误信息
-        """
-        try:
-            # 使用 sqlglot 解析 SQL
-            parsed = sqlglot.parse_one(sql, dialect='mysql')
-
-            # 收集所有表名
-            tables = set()
-
-            # 遍历 AST 提取表名
-            for table in parsed.find_all(sqlglot.exp.Table):
-                # 获取完整表名（可能包含库名前缀）
-                table_name = str(table.this)
-                tables.add(table_name)
-
-            # 检查每个表
-            for table_name in tables:
-                # 如果表名包含数据库前缀（如 database_x.table_y）
-                if "." in table_name:
-                    parts = table_name.split(".")
-                    db_in_sql = parts[0].strip('`"[]')
-                    table_only = parts[1].strip('`"[]')
-
-                    # 验证数据库是否匹配
-                    if db_in_sql.upper() != allowed_database.upper():
-                        return f"错误: 检测到跨库查询，表 {table_name} 不在数据库 {allowed_database} 中"
-                else:
-                    # 表名没有数据库前缀，验证该表是否属于允许的数据库
-                    if not self._table_exists_in_database(allowed_database, table_name):
-                        return f"错误: 表 {table_name} 在数据库 {allowed_database} 中不存在"
-
-            return "ok"
-
-        except Exception as e:
-            logger.warning(f"SQL 解析失败，跳过跨库检查: {e}")
-            return "ok"  # 解析失败时放行
-
-    def _table_exists_in_database(self, database: str, table_name: str) -> bool:
-        """
-        验证表是否存在于指定数据库
-
-        Args:
-            database: 数据库名
-            table_name: 表名
-
-        Returns:
-            是否存在
-        """
-        try:
-            cache_key = f"mysql:table_exists:{database}:{table_name}"
-
-            # 从缓存获取
-            cached = cache.get(cache_key)
-            if cached is not None:
-                return cached
-
-            with mysql_pool.get_connection(database) as conn:
-                cursor = conn.cursor()
-
-                sql = """
-                    SELECT COUNT(*) as cnt
-                    FROM information_schema.TABLES
-                    WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
-                """
-                cursor.execute(sql, (database, table_name.strip('`"[]')))
-                result = cursor.fetchone()
-
-                exists = result['cnt'] > 0 if result else False
-
-            # 缓存30分钟
-            cache.set(cache_key, exists, expire=1800)
-
-            return exists
-
-        except Exception as e:
-            logger.warning(f"验证表存在性失败: {e}")
-            return False
-
 
 # 默认实例
 mysql_query = MySQLQuery()

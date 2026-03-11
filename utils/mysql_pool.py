@@ -56,6 +56,7 @@ class MySQLConnectionPool:
                     user=node['username'],
                     password=node['password'],
                     charset=node.get('charset', 'utf8mb4'),
+                    cursorclass=pymysql.cursors.DictCursor,
                 )
                 self._pools[node_name] = pool
                 logger.info(f"MySQL 连接池初始化成功: {node_name}")
@@ -142,6 +143,9 @@ class MySQLConnectionPool:
         conn = pool.connection()
 
         try:
+            # 使用 SQL 语句切换到指定数据库
+            with conn.cursor() as cursor:
+                cursor.execute(f"USE `{database}`")
             yield conn
         finally:
             conn.close()  # 归还连接到池
