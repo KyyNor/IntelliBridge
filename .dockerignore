@@ -10,6 +10,7 @@ dist
 build/*
 !build/*.tar.xz
 !build/node-v*-linux-x64/
+!build/python-packages/
 .git
 .gitignore
 .vscode

@@ -1,0 +1,47 @@
+FROM python:3.12-slim
+
+# 引入构建参数（支持内网镜像源）
+ARG PYTHON_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG NODE_VERSION=24.1.0
+
+WORKDIR /app
+
+# 复制预解压的 Node.js 目录
+COPY build/node-v${NODE_VERSION}-linux-x64/ /usr/local/
+
+# 验证 Node.js 版本
+RUN node --version && npm --version
+
+# 设置 npm 镜像源
+RUN npm config set registry ${NPM_REGISTRY}
+
+# 安装 agent-browser
+RUN npm install -g agent-browser && \
+    agent-browser --version
+
+# 复制 requirements
+COPY requirements.txt .
+
+# ========== 离线安装模式 ==========
+
+# 检查是否存在离线包目录，如果存在则使用离线安装
+RUN if [ -d "build/python-packages" ]; then \
+      echo "使用离线包安装 Python 依赖..."; \
+      ls build/python-packages/ | wc -l && \
+      pip install --no-cache-dir --no-index --find-links=build/python-packages/ -r requirements.txt; \
+    else \
+      echo "使用在线镜像源安装 Python 依赖..."; \
+      pip install --no-cache-dir -i ${PYTHON_PIP_INDEX_URL} -r requirements.txt; \
+    fi
+
+# ==================================
+
+# 复制应用代码
+COPY . .
+
+# 暴露端口
+EXPOSE 49000 49001
+
+# 运行应用
+CMD ["python", "main.py"]
