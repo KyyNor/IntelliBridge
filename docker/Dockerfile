@@ -7,10 +7,10 @@ ARG NODE_VERSION=24.1.0
 
 WORKDIR /app
 
-# 复制预解压的 Node.js 目录
-# build.sh 脚本会先解压 Node.js 压缩包到 build/node-v{VERSION}-linux-x64/
+# 复制并解压 Node.js（从 docker/build/ 目录）
+# build.sh 脚本会先解压 Node.js 压缩包到 docker/build/node-v{VERSION}-linux-x64/
 # 这样可以避免在容器内安装 xz-utils（内网可能无 apt 源）
-COPY build/node-v${NODE_VERSION}-linux-x64/ /usr/local/
+COPY docker/build/node-v${NODE_VERSION}-linux-x64/ /usr/local/
 
 # 验证 Node.js 版本
 RUN node --version && npm --version

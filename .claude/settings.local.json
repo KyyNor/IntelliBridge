@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add main.py requirements.txt Dockerfile docker-compose.yml .dockerignore utils/ config/ cache/ logs/ && git add -u)",
+      "Bash(docker build -t intellibridge:latest .)",
+      "Bash(docker run -d --name intellibridge-test -p 8000:8000 intellibridge:latest)",
+      "Bash(docker run -d --name intellibridge -p 49000:49000 intellibridge:latest)",
+      "Bash(curl -s http://localhost:49000/health | python3 -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:49000/api/hive/describe -H \"Content-Type: application/json\" -d '{\"table_name\":\"default.test\"}' | python3 -m json.tool)",
+      "Bash(docker stop intellibridge && docker rm intellibridge && docker rmi intellibridge:latest -f)",
+      "Bash(docker run -d --name intellibridge -p 49000:49000 -p 49001:49001 intellibridge:latest)",
+      "Bash(curl -s http://localhost:49001/mcp)",
+      "Bash(curl -s http://localhost:49000/health)",
+      "Bash(docker save intellibridge:latest | gzip > ~/intellibridge.tar.gz)",
+      "Bash(cd /home/kyynor/mcp_test/fastapi_demo && pip install -r requirements.txt -q)",
+      "Bash(git commit -m \"fix: 修复代码审查中发现的问题\n\n- 修复 datetime.utcnow 已弃用问题，改用 func.now\\(\\)\n- 改进加密密钥管理，支持环境变量，增强警告提示\n- 收紧 CORS 配置，从配置文件读取允许的源\n- 数据库 URL 支持环境变量覆盖\")",
+      "Bash(git add -A)",
+      "Bash(git push:*)"
+    ]
+  }
+}

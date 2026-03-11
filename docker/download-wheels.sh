@@ -4,6 +4,10 @@
 
 set -e
 
+# 获取脚本所在目录的绝对路径
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -14,9 +18,12 @@ echo -e "${GREEN}==================================${NC}"
 echo -e "${GREEN}Python 离线包下载脚本${NC}"
 echo -e "${GREEN}==================================${NC}"
 
+# 切换到 docker 目录
+cd "${SCRIPT_DIR}"
+
 # 配置
 PACKAGES_DIR="build/python-packages"
-REQUIREMENTS_FILE="requirements.txt"
+REQUIREMENTS_FILE="${PROJECT_ROOT}/requirements.txt"
 PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
 DOCKER_IMAGE=${DOCKER_IMAGE:-intellibridge:latest}
 
@@ -24,6 +31,13 @@ echo -e "${GREEN}配置信息：${NC}"
 echo "  PyPI 镜像源: ${PIP_INDEX_URL}"
 echo "  目标目录: ${PACKAGES_DIR}"
 echo "  Docker 镜像: ${DOCKER_IMAGE}"
+
+# 检查 requirements.txt 是否存在
+if [ ! -f "${REQUIREMENTS_FILE}" ]; then
+    echo -e "${RED}错误: 未找到 requirements.txt 文件${NC}"
+    echo -e "${YELLOW}请确保在项目根目录下运行此脚本${NC}"
+    exit 1
+fi
 
 # 检查 Docker 镜像是否存在
 if ! docker image inspect ${DOCKER_IMAGE} &> /dev/null; then
@@ -44,7 +58,7 @@ rm -rf ${PACKAGES_DIR}/*
 echo -e "${GREEN}开始下载 Python 离线包...${NC}"
 echo -e "${YELLOW}使用 Docker 容器下载（确保与目标环境兼容）${NC}"
 
-docker run --rm -v $(pwd)/${PACKAGES_DIR}:/packages ${DOCKER_IMAGE} \
+docker run --rm -v $(pwd)/${PACKAGES_DIR}:/packages -v ${PROJECT_ROOT}:/app ${DOCKER_IMAGE} \
   bash -c "pip download -r /app/requirements.txt -d /packages -i ${PIP_INDEX_URL}"
 
 if [ $? -eq 0 ]; then
@@ -60,7 +74,7 @@ if [ $? -eq 0 ]; then
     echo -e "${GREEN}保存位置: ${PACKAGES_DIR}${NC}"
     echo -e ""
     echo -e "${YELLOW}提示: 可以使用以下命令打包传输到内网${NC}"
-    echo -e "  tar -czf python-packages.tar.gz -C build python-packages/"
+    echo -e "  tar -czf python-packages.tar.gz -C docker/build python-packages/"
 else
     echo -e "${RED}下载失败！${NC}"
     exit 1
