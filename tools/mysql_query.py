@@ -2,7 +2,7 @@ import re
 import hashlib
 from typing import Optional
 
-import pymysql
+import traceback
 import sqlglot
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -78,7 +78,8 @@ class MySQLQuery:
 
         except Exception as e:
             error_msg = f"获取数据库列表失败: {str(e)}"
-            logger.error(error_msg)
+            detail = traceback.format_exc()
+            logger.error(f"{error_msg}\n{detail}")
             return error_msg
 
     def search_tables(self, database: str, keyword: str = "") -> str:
@@ -157,8 +158,10 @@ class MySQLQuery:
 
         except Exception as e:
             error_msg = f"搜索表失败: {str(e)}"
-            logger.error(error_msg)
+            detail = traceback.format_exc()
+            logger.error(f"{error_msg}\n{detail}")
             return error_msg
+
 
     def describe_table(self, database: str, table_name: str) -> str:
         """
@@ -236,7 +239,8 @@ class MySQLQuery:
 
         except Exception as e:
             error_msg = f"查询表结构失败: {str(e)}"
-            logger.error(error_msg)
+            detail = traceback.format_exc()
+            logger.error(f"{error_msg}\n{detail}")
             return error_msg
 
     def query_data(self, database: str, sql: str, limit: int = 10) -> str:
@@ -332,7 +336,8 @@ class MySQLQuery:
 
         except Exception as e:
             error_msg = f"查询失败: {str(e)}"
-            logger.error(error_msg)
+            detail = traceback.format_exc()
+            logger.error(f"{error_msg}\n{detail}")
             return error_msg
 
     def _normalize_sql(self, sql: str) -> str:

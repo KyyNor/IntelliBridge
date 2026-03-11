@@ -57,7 +57,7 @@ echo -e "${GREEN}找到 Node.js 压缩包: build/${NODEJS_DISTFILE}${NC}"
 
 # 解压 Node.js
 echo -e "${GREEN}解压 Node.js 到 build/ 目录...${NC}"
-NODE_EXTRACTED_DIR="build/node-${NODE_VERSION}-linux-x64"
+NODE_EXTRACTED_DIR="build/node-v${NODE_VERSION}-linux-x64"
 
 # 如果已解压过，先删除
 if [ -d "${NODE_EXTRACTED_DIR}" ]; then
@@ -77,7 +77,7 @@ echo -e "${GREEN}开始构建 Docker 镜像: ${IMAGE_TAG}${NC}"
 
 # 切换到项目根目录构建
 cd "${PROJECT_ROOT}"
-docker build \
+docker build --network=host \
   -f docker/Dockerfile \
   --build-arg PYTHON_PIP_INDEX_URL=${PYTHON_PIP_INDEX_URL} \
   --build-arg NPM_REGISTRY=${NPM_REGISTRY} \
