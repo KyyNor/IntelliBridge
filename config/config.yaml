@@ -41,3 +41,19 @@ mysql:
     #   databases:
     #     - name: whjcbb
     #       description: "业务库"
+
+# Memory (Mem0) 记忆模块配置
+memory:
+  # Qdrant 向量存储配置
+  qdrant:
+    host: "localhost"
+    port: 6333
+    api_key: ""
+    collection_name: "intellibridge_memory"
+
+  # Embedding 配置 (OpenAI 兼容格式)
+  embedding:
+    base_url: "http://localhost:8000/v1"
+    api_key: "sk-test-key"
+    model: "text-embedding-3-small"
+    dimension: 1024
