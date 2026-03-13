@@ -57,3 +57,18 @@ memory:
     api_key: "sk-test-key"
     model: "text-embedding-3-small"
     dimension: 1024
+
+  # LLM 配置 (用于 add 操作时的记忆提取)
+  llm:
+    provider: "openai"
+    base_url: "http://localhost:8000/v1"
+    api_key: "sk-test-key"
+    model: "qwen2.5"
+
+  # Reranker 配置 (用于搜索结果排序)
+  reranker:
+    provider: "llm_reranker"
+    base_url: "http://localhost:8000/v1"
+    api_key: "sk-test-key"
+    model: "qwen2.5"
+    top_k: 10

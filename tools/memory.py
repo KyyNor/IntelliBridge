@@ -11,8 +11,10 @@ from typing import Optional, List, Dict, Any
 import json
 from mem0 import Memory
 from mem0.configs.base import MemoryConfig
-from mem0.configs.vector_stores import QdrantConfig
-from mem0.configs.embeddings import EmbedderConfig
+from mem0.configs.base import VectorStoreConfig
+from mem0.embeddings.configs import EmbedderConfig
+from mem0.llms.configs import LlmConfig
+from mem0.configs.base import RerankerConfig
 
 from utils.mcp import mcp
 from utils.decorators import log_function_info
@@ -48,6 +50,8 @@ class Mem0Memory:
             memory_config = self._get_config()
             qdrant_config = memory_config.get("qdrant", {})
             embedding_config = memory_config.get("embedding", {})
+            llm_config = memory_config.get("llm", {})
+            reranker_config = memory_config.get("reranker", {})
 
             # 构建 Embedder 配置 (使用 OpenAI 兼容格式)
             embedder_cfg = EmbedderConfig(
@@ -61,7 +65,7 @@ class Mem0Memory:
             )
 
             # 构建 Qdrant 向量存储配置
-            vector_store_cfg = QdrantConfig(
+            vector_store_cfg = VectorStoreConfig(
                 host=qdrant_config.get("host", "localhost"),
                 port=qdrant_config.get("port", 6333),
                 api_key=qdrant_config.get("api_key", ""),
@@ -69,10 +73,38 @@ class Mem0Memory:
                 embedding_model_dims=embedding_config.get("dimension", 1024)
             )
 
+            # 构建 LLM 配置 (用于 add 操作时的记忆提取)
+            llm_cfg = None
+            if llm_config:
+                llm_cfg = LlmConfig(
+                    provider=llm_config.get("provider", "openai"),
+                    config={
+                        "model": llm_config.get("model", "qwen2.5"),
+                        "api_key": llm_config.get("api_key", ""),
+                        "openai_base_url": llm_config.get("base_url", "http://localhost:8000/v1")
+                    }
+                )
+
+            # 构建 Reranker 配置 (用于搜索结果排序)
+            reranker_cfg = None
+            if reranker_config:
+                reranker_cfg = RerankerConfig(
+                    provider=reranker_config.get("provider", "llm_reranker"),
+                    config={
+                        "provider": llm_config.get("provider", "openai") if llm_config else "openai",
+                        "model": llm_config.get("model", "qwen2.5") if llm_config else "qwen2.5",
+                        "api_key": llm_config.get("api_key", "") if llm_config else "",
+                        "openai_base_url": llm_config.get("base_url", "http://localhost:8000/v1") if llm_config else "http://localhost:8000/v1",
+                        "top_k": reranker_config.get("top_k", 10)
+                    } if reranker_config.get("provider") == "llm_reranker" else None
+                )
+
             # 构建 MemoryConfig
             mem_cfg = MemoryConfig(
                 embedder=embedder_cfg,
-                vector_store=vector_store_cfg
+                vector_store=vector_store_cfg,
+                llm=llm_cfg,
+                reranker=reranker_cfg
             )
 
             # 创建 Mem0 实例
@@ -112,7 +144,7 @@ class Mem0Memory:
 
         try:
             result = self._memory.add(
-                content=content,
+                messages=content,
                 user_id=user_id,
                 agent_id=agent_id,
                 run_id=run_id
@@ -121,6 +153,9 @@ class Mem0Memory:
         except Exception as e:
             logger.error(f"添加记忆失败: {e}")
             return {"success": False, "error": str(e)}
+
+    # 最大返回条数
+    MAX_SEARCH_LIMIT = 100
 
     def search(
         self,
@@ -138,7 +173,7 @@ class Mem0Memory:
             agent_id: 应用/助手 ID
             run_id: 会话 ID
             query: 查询内容
-            limit: 返回结果数量
+            limit: 返回结果数量（最大 100）
 
         Returns:
             搜索结果
@@ -147,6 +182,9 @@ class Mem0Memory:
             self.initialize()
 
         try:
+            # 限制最大返回条数
+            limit = max(1, min(limit, self.MAX_SEARCH_LIMIT))
+
             results = self._memory.search(
                 query=query,
                 user_id=user_id,
@@ -180,6 +218,26 @@ class Mem0Memory:
             logger.error(f"删除记忆失败: {e}")
             return {"success": False, "error": str(e)}
 
+    def update(self, memory_id: str, content: str) -> Dict[str, Any]:
+        """
+        更新指定记忆
+
+        Args:
+            memory_id: 记忆 ID
+            content: 新的记忆内容
+
+        Returns:
+            更新结果
+        """
+        if not self._initialized:
+            self.initialize()
+
+        try:
+            result = self._memory.update(memory_id=memory_id, data={"memory": content})
+            return {"success": True, "data": result}
+        except Exception as e:
+            logger.error(f"更新记忆失败: {e}")
+            return {"success": False, "error": str(e)}
 
 
 # 全局实例
@@ -251,5 +309,22 @@ def memory_delete(memory_id: str) -> str:
         JSON 格式的删除结果
     """
     result = mem.delete(memory_id)
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+@log_function_info
+def memory_update(memory_id: str, content: str) -> str:
+    """
+    更新指定记忆
+
+    Args:
+        memory_id: 记忆 ID
+        content: 新的记忆内容
+
+    Returns:
+        JSON 格式的更新结果
+    """
+    result = mem.update(memory_id, content)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
