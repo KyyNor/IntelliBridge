@@ -51,30 +51,17 @@ class MySQLQuery:
         列出所有可用的数据库
 
         Returns:
-            逗号分隔的数据库名列表
+            CSV 格式的数据库列表（数据库标识符,描述）
         """
         try:
-            cache_key = "mysql:databases:list"
-
-            # 尝试从缓存获取
-            cached_result = cache.get(cache_key)
-            if cached_result is not None:
-                logger.info("从缓存获取数据库列表")
-                return cached_result
-
             # 从连接池获取数据库列表
             databases = mysql_pool.get_database_list()
 
             if not databases:
                 return "错误: 没有可用的数据库"
 
-            result = ",".join(databases)
-
-            # 缓存1小时
-            cache.set(cache_key, result, expire=3600)
-
-            logger.info(f"获取数据库列表成功: {len(databases)} 个数据库")
-            return result
+            logger.info(f"获取数据库列表成功: {len(databases) - 1} 个数据库")
+            return '\n'.join(databases)
 
         except Exception as e:
             error_msg = f"获取数据库列表失败: {str(e)}"
@@ -87,7 +74,7 @@ class MySQLQuery:
         搜索数据库中的表（支持模糊匹配表名和表注释）
 
         Args:
-            database: 数据库名
+            database: 数据库唯一标识符（如 nodeA_whjcbb）
             keyword: 搜索关键字（可选）
 
         Returns:
@@ -110,6 +97,9 @@ class MySQLQuery:
             with mysql_pool.get_connection(database) as conn:
                 cursor = conn.cursor()
 
+                # 获取实际数据库名用于 SQL 查询
+                actual_db = mysql_pool.get_database_by_unique_id(database)
+
                 # 构建查询SQL
                 if keyword:
                     # 模糊匹配表名或表注释
@@ -121,7 +111,7 @@ class MySQLQuery:
                         ORDER BY TABLE_NAME
                     """
                     like_pattern = f"%{keyword}%"
-                    cursor.execute(sql, (database, like_pattern, like_pattern))
+                    cursor.execute(sql, (actual_db, like_pattern, like_pattern))
                 else:
                     # 获取所有表
                     sql = """
@@ -130,9 +120,12 @@ class MySQLQuery:
                         WHERE TABLE_SCHEMA = %s
                         ORDER BY TABLE_NAME
                     """
-                    cursor.execute(sql, (database,))
+                    cursor.execute(sql, (actual_db,))
 
                 results = cursor.fetchall()
+
+            if not results:
+                return f"数据库 {database} ({actual_db}) 中未找到表"
 
             if not results:
                 return f"数据库 {database} 中未找到表"
@@ -191,6 +184,9 @@ class MySQLQuery:
             with mysql_pool.get_connection(database) as conn:
                 cursor = conn.cursor()
 
+                # 获取实际数据库名用于 SQL 查询
+                actual_db = mysql_pool.get_database_by_unique_id(database)
+
                 # 查询表结构
                 sql = """
                     SELECT
@@ -204,11 +200,11 @@ class MySQLQuery:
                     WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
                     ORDER BY ORDINAL_POSITION
                 """
-                cursor.execute(sql, (database, table_name))
+                cursor.execute(sql, (actual_db, table_name))
                 results = cursor.fetchall()
 
             if not results:
-                return f"错误: 表 {database}.{table_name} 不存在或无数据"
+                return f"错误: 表 {database} ({actual_db}).{table_name} 不存在或无数据"
 
             # 转换为 CSV 格式
             output = []
@@ -248,7 +244,7 @@ class MySQLQuery:
         执行查询SQL
 
         Args:
-            database: 数据库名
+            database: 数据库唯一标识符（如 nodeA_whjcbb）
             sql: 查询 SQL 语句
             limit: 返回数据条数，默认10，最多1000
 
@@ -407,10 +403,10 @@ def mysql_list_databases() -> str:
     """
     列出所有可用的MySQL数据库
 
-    返回所有可访问的数据库名列表（不显示节点信息）
+    返回 CSV 格式的数据库列表（数据库标识符,描述）
 
     Returns:
-        逗号分隔的数据库名列表
+        CSV 格式的数据库列表
     """
     return mysql_query.list_databases()
 
@@ -422,7 +418,7 @@ def mysql_search_tables(database: str, keyword: str = "") -> str:
     搜索MySQL数据库中的表
 
     Args:
-        database: 数据库名
+        database: 数据库唯一标识符（如 nodeA_whjcbb）
         keyword: 搜索关键字（可选），支持模糊匹配表名和表注释
 
     Returns:
@@ -438,7 +434,7 @@ def mysql_describe(database: str, table_name: str) -> str:
     查询MySQL表结构
 
     Args:
-        database: 数据库名
+        database: 数据库唯一标识符（如 nodeA_whjcbb）
         table_name: 表名
 
     Returns:
@@ -454,7 +450,7 @@ def mysql_query_tool(database: str, sql: str, limit: int = 10) -> str:
     执行MySQL查询SQL
 
     Args:
-        database: 数据库名
+        database: 数据库唯一标识符（如 nodeA_whjcbb）
         sql: 查询 SQL 语句（仅允许 SELECT）
         limit: 返回数据条数，默认10，最多1000
 

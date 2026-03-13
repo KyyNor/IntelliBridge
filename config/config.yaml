@@ -21,4 +21,23 @@ mysql:
       password: "intellibridge_password"
       charset: "utf8mb4"
       databases:
-        - intellibridge
+        - name: intellibridge
+          description: "主数据库，用于系统核心数据存储"
+
+    # 示例：多节点配置（同名数据库需使用不同节点名区分）
+    # - name: nodeA
+    #   host: "192.168.1.100"
+    #   port: 3306
+    #   username: "user"
+    #   password: "pass"
+    #   databases:
+    #     - name: whjcbb
+    #       description: "决策报表库"
+    # - name: nodeB
+    #   host: "192.168.1.101"
+    #   port: 3306
+    #   username: "user"
+    #   password: "pass"
+    #   databases:
+    #     - name: whjcbb
+    #       description: "业务库"
