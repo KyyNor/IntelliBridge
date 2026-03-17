@@ -277,16 +277,6 @@ class MySQLQuery:
             if not re.search(r"\bLIMIT\s+\d+", normalized_sql, re.IGNORECASE):
                 final_sql = f"{normalized_sql} LIMIT {limit}"
 
-            # 计算 SQL 哈希
-            sql_hash = self._get_sql_hash(final_sql)
-            cache_key = f"mysql:query:{database}:{sql_hash}"
-
-            # 尝试从缓存获取结果
-            cached_result = cache.get(cache_key)
-            if cached_result is not None:
-                logger.info(f"从缓存获取查询结果: {sql_hash[:8]}...")
-                return cached_result
-
             # 执行查询
             with mysql_pool.get_connection(database) as conn:
                 cursor = conn.cursor()
@@ -318,9 +308,6 @@ class MySQLQuery:
                     output.append(",".join(row_str))
 
                 result = "\n".join(output)
-
-            # 缓存5分钟
-            cache.set(cache_key, result, expire=300)
 
             logger.info(f"查询成功，返回 {len(results)} 条数据")
             return result

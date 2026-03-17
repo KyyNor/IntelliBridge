@@ -141,8 +141,8 @@ class HiveQuery:
                 return "错误: SQL 语句不能为空"
 
             # 判断是否为 SELECT 语句
-            if not re.match(r"^\s*SELECT\s", sql, re.IGNORECASE):
-                return "错误: 只允许执行 SELECT 查询"
+            if not re.match(r"^\s*(SELECT|WITH|REFRESH)\s", sql, re.IGNORECASE):
+                return "错误: 只允许执行 SELECT、WITH、REFRESH 查询"
 
             # 限制返回条数
             limit = max(1, min(limit, 1000))
@@ -159,16 +159,6 @@ class HiveQuery:
             final_sql = normalized_sql
             if not re.search(r"\bLIMIT\s+\d+", normalized_sql, re.IGNORECASE):
                 final_sql = f"{normalized_sql} LIMIT {limit}"
-
-            # 计算 SQL 哈希
-            sql_hash = self._get_sql_hash(final_sql)
-            cache_key = f"hive_query:{sql_hash}"
-
-            # 尝试从缓存获取结果
-            cached_result = cache.get(cache_key)
-            if cached_result is not None:
-                logger.info(f"从缓存获取查询结果: {sql_hash[:8]}...")
-                return cached_result
 
             # 执行查询
             conn = self._get_connection()
@@ -202,9 +192,6 @@ class HiveQuery:
                 output.append(",".join(row_str))
 
             result = "\n".join(output)
-
-            # 缓存结果（1小时过期）
-            cache.set(cache_key, result, expire=3600)
 
             logger.info(f"查询成功，返回 {len(results)} 条数据")
             return result
@@ -303,7 +290,7 @@ def hive_describe(table_name: str) -> str:
 @log_function_info
 def hive_query_tool(sql: str, limit: int = 10) -> str:
     """
-    查询 Hive 数据
+    查询 Hive 数据，允许执行SELECT、WITH开头的查询语句，或REFRESH 开头的刷新语句
 
     Args:
         sql: 查询 SQL 语句
