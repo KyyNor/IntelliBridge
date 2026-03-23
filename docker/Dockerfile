@@ -35,4 +35,5 @@ COPY . .
 EXPOSE 49000 49001
 
 # 运行应用
-CMD sh -c "agent-browser --session startup --session-name startup --cdp http://browserless:3000 open http://125.1.129.76:8080/fr/ && python main.py"
+# CMD sh -c "agent-browser --session startup --session-name startup --cdp http://browserless:3000 open http://125.1.129.76:8080/fr/ && python main.py"
+CMD sh -c "python main.py"

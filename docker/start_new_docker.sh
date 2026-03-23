@@ -13,15 +13,15 @@ docker run -d \
     --name intellibridge \
     --restart unless-stopped \
     -p 49000:49000 \
-    -p 49001:49001 \
+    -p 49005:49001 \
     -v $DATA_PATH/cache:/app/cache \
     -v $DATA_PATH/logs:/app/logs \
     -v $DATA_PATH/config:/app/config \
     intellibridge:latest
 
 # 清理1天以前的dangling镜像（none标签）
-echo "Cleaning up old dangling images (older than 24h)..."
-docker image prune -af --filter "until=24h"
+echo "Cleaning up old dangling images (none tag, older than 24h)..."
+docker image prune -f --filter "dangling=true" --filter "until=24h"
 
 echo "Done!"
 
