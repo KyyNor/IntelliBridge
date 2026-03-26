@@ -69,11 +69,10 @@ class Mem0Memory:
             vector_store_cfg = VectorStoreConfig(
                 provider="qdrant",
                 config={
-                    "host" : qdrant_config.get("host", "localhost"),
-                    "port" : qdrant_config.get("port", 6333),
-                    "api_key" : qdrant_config.get("api_key", ""),
                     "collection_name" : qdrant_config.get("collection_name", "intellibridge_memory"),
-                    "embedding_model_dims" : embedding_config.get("dimension", 1024)
+                    "path" : qdrant_config.get("path", "/app/data/qdrant"),
+                    "embedding_model_dims" : embedding_config.get("dimension", 1024),
+                    "on_disk": True
                 }
             )
 

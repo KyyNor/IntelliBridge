@@ -49,6 +49,7 @@ memory:
     host: "localhost"
     port: 6333
     api_key: ""
+    path: "/app/data/qdrant"
     collection_name: "intellibridge_memory"
 
   # Embedding 配置 (OpenAI 兼容格式)
