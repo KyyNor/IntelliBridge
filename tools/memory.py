@@ -123,8 +123,6 @@ class Mem0Memory:
     def add(
         self,
         user_id: str,
-        agent_id: str,
-        run_id: str,
         content: str
     ) -> Dict[str, Any]:
         """
@@ -146,8 +144,6 @@ class Mem0Memory:
             result = self._memory.add(
                 messages=content,
                 user_id=user_id,
-                agent_id=agent_id,
-                run_id=run_id
             )
             return {"success": True, "data": result}
         except Exception as e:
@@ -160,8 +156,6 @@ class Mem0Memory:
     def search(
         self,
         user_id: str,
-        agent_id: str,
-        run_id: str,
         query: str,
         limit: int = 5
     ) -> Dict[str, Any]:
@@ -188,8 +182,6 @@ class Mem0Memory:
             results = self._memory.search(
                 query=query,
                 user_id=user_id,
-                agent_id=agent_id,
-                run_id=run_id,
                 limit=limit
             )
             return {"success": True, "data": results}
@@ -250,23 +242,18 @@ mem = Mem0Memory()
 @log_function_info
 def memory_add(
     user_id: str,
-    agent_id: str,
-    run_id: str,
     content: str
 ) -> str:
     """
     添加记忆
 
     Args:
-        user_id: 用户/小组 ID（如 "ai-innovation-team"）
-        agent_id: 应用/助手 ID（如 "credit-bot", "claude-code"）
-        run_id: 会话 ID（如 "session-abc123"）
         content: 记忆内容
 
     Returns:
         JSON 格式的添加结果
     """
-    result = mem.add(user_id, agent_id, run_id, content)
+    result = mem.add(user_id, content)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -274,8 +261,6 @@ def memory_add(
 @log_function_info
 def memory_search(
     user_id: str,
-    agent_id: str,
-    run_id: str,
     query: str,
     limit: int = 5
 ) -> str:
@@ -283,16 +268,14 @@ def memory_search(
     搜索记忆
 
     Args:
-        user_id: 用户/小组 ID
-        agent_id: 应用/助手 ID
-        run_id: 会话 ID
+        user_id: 当前用户名称
         query: 查询内容
         limit: 返回结果数量（默认 5）
 
     Returns:
         JSON 格式的搜索结果
     """
-    result = mem.search(user_id, agent_id, run_id, query, limit)
+    result = mem.search(user_id, query, limit)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
