@@ -107,9 +107,10 @@ class Mem0Memory:
                 embedder=embedder_cfg,
                 vector_store=vector_store_cfg,
                 llm=llm_cfg,
-                reranker=reranker_cfg,
+                # reranker=reranker_cfg,
                 custom_fact_extraction_prompt=MEMORY_FACT_EXTRACTION_PROMPT,
             )
+            # 暂时不使用reranker服务，因为mem0ai并不支持xinference提供的reranker api
 
             # 创建 Mem0 实例
             self._memory = Memory(config=mem_cfg)
@@ -178,7 +179,6 @@ class Mem0Memory:
         try:
             # 限制最大返回条数
             limit = max(1, min(limit, self.MAX_SEARCH_LIMIT))
-
             results = self._memory.search(
                 query=query,
                 user_id=user_id,
