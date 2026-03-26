@@ -14,9 +14,11 @@ docker run -d \
     --restart unless-stopped \
     -p 49000:49000 \
     -p 49005:49001 \
+    -e MEM0_TELEMETRY=False \
     -v $DATA_PATH/cache:/app/cache \
     -v $DATA_PATH/logs:/app/logs \
     -v $DATA_PATH/config:/app/config \
+    -v $DATA_PATH/data:/app/data \
     intellibridge:latest
 
 # 清理1天以前的dangling镜像（none标签）
