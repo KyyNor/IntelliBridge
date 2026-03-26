@@ -134,8 +134,6 @@ class Mem0Memory:
 
         Args:
             user_id: 用户/小组 ID
-            agent_id: 应用/助手 ID
-            run_id: 会话 ID
             content: 记忆内容
 
         Returns:
@@ -168,8 +166,6 @@ class Mem0Memory:
 
         Args:
             user_id: 用户/小组 ID
-            agent_id: 应用/助手 ID
-            run_id: 会话 ID
             query: 查询内容
             limit: 返回结果数量（最大 100）
 
@@ -252,7 +248,8 @@ def memory_add(
     添加记忆
 
     Args:
-        content: 记忆内容
+        user_id: 当前系统登录用户名
+        content: 记忆内容,可传递长文本
 
     Returns:
         JSON 格式的添加结果
@@ -272,7 +269,7 @@ def memory_search(
     搜索记忆
 
     Args:
-        user_id: 当前用户名称
+        user_id: 当前系统登录用户名
         query: 查询内容
         limit: 返回结果数量（默认 5）
 
