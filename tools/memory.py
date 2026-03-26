@@ -16,6 +16,7 @@ from mem0.embeddings.configs import EmbedderConfig
 from mem0.llms.configs import LlmConfig
 from mem0.configs.base import RerankerConfig
 
+from prompts.memory_prompts import MEMORY_FACT_EXTRACTION_PROMPT
 from utils.mcp import mcp
 from utils.decorators import log_function_info
 from utils.config import config
@@ -66,11 +67,14 @@ class Mem0Memory:
 
             # 构建 Qdrant 向量存储配置
             vector_store_cfg = VectorStoreConfig(
-                host=qdrant_config.get("host", "localhost"),
-                port=qdrant_config.get("port", 6333),
-                api_key=qdrant_config.get("api_key", ""),
-                collection_name=qdrant_config.get("collection_name", "intellibridge_memory"),
-                embedding_model_dims=embedding_config.get("dimension", 1024)
+                provider="qdrant",
+                config={
+                    "host" : qdrant_config.get("host", "localhost"),
+                    "port" : qdrant_config.get("port", 6333),
+                    "api_key" : qdrant_config.get("api_key", ""),
+                    "collection_name" : qdrant_config.get("collection_name", "intellibridge_memory"),
+                    "embedding_model_dims" : embedding_config.get("dimension", 1024)
+                }
             )
 
             # 构建 LLM 配置 (用于 add 操作时的记忆提取)
@@ -108,7 +112,10 @@ class Mem0Memory:
             )
 
             # 创建 Mem0 实例
-            self._memory = Memory(config=mem_cfg)
+            self._memory = Memory(
+                config=mem_cfg,
+                custom_fact_extraction_prompt=MEMORY_FACT_EXTRACTION_PROMPT,
+            )
 
             self._initialized = True
             logger.info("Mem0 记忆客户端初始化成功")
