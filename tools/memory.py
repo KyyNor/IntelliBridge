@@ -108,14 +108,12 @@ class Mem0Memory:
                 embedder=embedder_cfg,
                 vector_store=vector_store_cfg,
                 llm=llm_cfg,
-                reranker=reranker_cfg
+                reranker=reranker_cfg,
+                custom_fact_extraction_prompt=MEMORY_FACT_EXTRACTION_PROMPT,
             )
 
             # 创建 Mem0 实例
-            self._memory = Memory(
-                config=mem_cfg,
-                custom_fact_extraction_prompt=MEMORY_FACT_EXTRACTION_PROMPT,
-            )
+            self._memory = Memory(config=mem_cfg)
 
             self._initialized = True
             logger.info("Mem0 记忆客户端初始化成功")
