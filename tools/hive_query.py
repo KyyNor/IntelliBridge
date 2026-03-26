@@ -44,9 +44,27 @@ class HiveQuery:
             self.conn = hive_pool.get_connection()
         return self.conn
 
+    def _remove_comments(self, sql: str) -> str:
+        """
+        移除 SQL 中的单行注释 (--)
+
+        Args:
+            sql: 原始 SQL 语句
+
+        Returns:
+            移除注释后的 SQL 语句
+        """
+        lines = sql.split('\n')
+        filtered_lines = []
+        for line in lines:
+            # 检测并移除 -- 注释
+            if not line.strip().startswith('--'):
+                filtered_lines.append(line)
+        return '\n'.join(filtered_lines)
+
     def _normalize_sql(self, sql: str) -> str:
         """
-        标准化 SQL：转大写并格式化
+        标准化 SQL：移除注释、转大写并格式化
 
         Args:
             sql: 原始 SQL 语句
@@ -54,15 +72,50 @@ class HiveQuery:
         Returns:
             标准化后的 SQL 语句
         """
+        # 先移除注释
+        sql_no_comment = self._remove_comments(sql)
+
         try:
             # 使用 sqlglot 格式化 SQL
-            formatted = sqlglot.parse_one(sql, dialect='hive').sql(dialect='hive')
+            formatted = sqlglot.parse_one(sql_no_comment, dialect='hive').sql(dialect='hive')
             # 转大写
             normalized = formatted.upper()
             return normalized
         except Exception as e:
             logger.warning(f"SQL 格式化失败，使用原始 SQL: {e}")
-            return sql.upper()
+            return sql_no_comment.upper()
+
+    def _check_sql_type(self, sql: str) -> str:
+        """
+        检查 SQL 类型是否允许执行
+
+        Args:
+            sql: SQL 语句（已移除注释）
+
+        Returns:
+            "ok" 表示通过，否则返回错误信息
+        """
+        sql_stripped = sql.strip()
+
+        # 检查是否包含禁止的关键字（INSERT、DELETE、DROP）
+        # 忽略 WITH 子句中的 CTAS
+        forbidden_keywords = ['DELETE', 'DROP']
+
+        # 对于非 WITH 开头的语句，检查是否有 INSERT（CTAS 在下面单独处理）
+        if not sql_stripped.upper().startswith('WITH'):
+            if re.search(r'\bINSERT\b', sql_stripped, re.IGNORECASE):
+                return "错误: 不允许执行 INSERT 操作"
+
+        for keyword in forbidden_keywords:
+            if re.search(rf'\b{keyword}\b', sql_stripped, re.IGNORECASE):
+                return f"错误: 不允许执行 {keyword} 操作"
+
+        # 检查是否以允许的关键词开头（SELECT、WITH、REFRESH）
+        # 注意：WITH 后面可能跟着 INSERT（如 WITH temp AS (...) INSERT...），这种情况是允许的 CTE + DML
+        if not re.match(r'^\s*(SELECT|WITH|REFRESH)\s', sql_stripped, re.IGNORECASE):
+            return "错误: 只允许执行 SELECT、WITH、REFRESH 查询"
+
+        return "ok"
 
     def _get_sql_hash(self, sql: str) -> str:
         """
@@ -136,24 +189,28 @@ class HiveQuery:
         """
         try:
             # 参数校验
-            sql = sql.strip()
-            if not sql:
+            original_sql = sql.strip()
+            if not original_sql:
                 return "错误: SQL 语句不能为空"
 
-            # 判断是否为 SELECT 语句
-            if not re.match(r"^\s*(SELECT|WITH|REFRESH)\s", sql, re.IGNORECASE):
-                return "错误: 只允许执行 SELECT、WITH、REFRESH 查询"
+            # 移除注释（用于检查SQL类型）
+            sql_no_comment = self._remove_comments(original_sql)
+
+            # 检查 SQL 类型（是否允许执行）
+            type_check_result = self._check_sql_type(sql_no_comment)
+            if type_check_result != "ok":
+                return type_check_result
 
             # 限制返回条数
             limit = max(1, min(limit, 1000))
 
-            # 标准化 SQL（转大写并格式化）
-            normalized_sql = self._normalize_sql(sql)
+            # 标准化 SQL（转大写并格式化，会自动移除注释）
+            normalized_sql = self._normalize_sql(original_sql)
 
-            # 检查表名和过滤条件（使用原始 SQL）
-            check_result = self._check_sql_filter(sql)
-            if check_result != "ok":
-                return check_result
+            # 检查表名和过滤条件（使用移除注释后的 SQL）
+            filter_check_result = self._check_sql_filter(sql_no_comment)
+            if filter_check_result != "ok":
+                return filter_check_result
 
             # 添加 LIMIT 限制到标准化 SQL
             final_sql = normalized_sql
