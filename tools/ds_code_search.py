@@ -171,7 +171,7 @@ class DataFactoryCodeSearch:
 
         # 4. 执行查询
         try:
-            with mysql_pool.get_connection("node137_data_factory") as conn:
+            with mysql_pool.get_connection("local_node_data_factory") as conn:
                 cursor = conn.cursor()
                 cursor.execute(sql, params)
                 results = cursor.fetchall()
@@ -305,7 +305,7 @@ class DataFactoryCodeSearch:
 
         # 执行查询
         try:
-            with mysql_pool.get_connection("node137_data_factory") as conn:
+            with mysql_pool.get_connection("local_node_data_factory") as conn:
                 cursor = conn.cursor()
                 cursor.execute(sql, params)
                 results = cursor.fetchall()
