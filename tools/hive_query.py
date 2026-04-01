@@ -36,13 +36,11 @@ class HiveQuery:
 
     def __init__(self):
         """初始化查询工具"""
-        self.conn = None
+        pass
 
     def _get_connection(self) -> hive.Connection:
-        """获取 Hive 连接"""
-        if self.conn is None:
-            self.conn = hive_pool.get_connection()
-        return self.conn
+        """获取 Hive 连接（每次从连接池获取，支持自动重连）"""
+        return hive_pool.get_connection()
 
     def _remove_comments(self, sql: str) -> str:
         """
@@ -148,28 +146,30 @@ class HiveQuery:
 
             conn = self._get_connection()
             cursor = conn.cursor()
+            try:
+                # 切换数据库
+                cursor.execute(f"USE {database}")
 
-            # 切换数据库
-            cursor.execute(f"USE {database}")
+                # 查看表结构
+                cursor.execute(f"DESCRIBE {table}")
+                results = cursor.fetchall()
 
-            # 查看表结构
-            cursor.execute(f"DESCRIBE {table}")
-            results = cursor.fetchall()
+                if not results:
+                    return f"错误: 表 {table_full_name} 不存在或无数据"
 
-            if not results:
-                return f"错误: 表 {table_full_name} 不存在或无数据"
+                # 转换为 CSV 格式
+                output = []
+                output.append("列名,数据类型,注释")
+                for row in results:
+                    col_name = row[0] if row[0] else ""
+                    data_type = row[1] if row[1] else ""
+                    comment = row[2] if len(row) > 2 and row[2] else ""
+                    output.append(f"{col_name},{data_type},{comment}")
 
-            # 转换为 CSV 格式
-            output = []
-            output.append("列名,数据类型,注释")
-            for row in results:
-                col_name = row[0] if row[0] else ""
-                data_type = row[1] if row[1] else ""
-                comment = row[2] if len(row) > 2 and row[2] else ""
-                output.append(f"{col_name},{data_type},{comment}")
-
-            logger.info(f"查询表结构成功: {table_full_name}")
-            return "\n".join(output)
+                logger.info(f"查询表结构成功: {table_full_name}")
+                return "\n".join(output)
+            finally:
+                cursor.close()
 
         except Exception as e:
             error_msg = f"查询表结构失败: {str(e)}"
@@ -220,38 +220,40 @@ class HiveQuery:
             # 执行查询
             conn = self._get_connection()
             cursor = conn.cursor()
+            try:
+                logger.info(f"执行查询: {final_sql}")
+                cursor.execute(final_sql)
 
-            logger.info(f"执行查询: {final_sql}")
-            cursor.execute(final_sql)
+                # 获取结果
+                results = cursor.fetchall()
+                if not results:
+                    return "查询结果为空"
 
-            # 获取结果
-            results = cursor.fetchall()
-            if not results:
-                return "查询结果为空"
+                # 获取列名
+                columns = [desc[0] for desc in cursor.description]
 
-            # 获取列名
-            columns = [desc[0] for desc in cursor.description]
+                # 转换为 CSV 格式
+                output = []
+                output.append(",".join(columns))
+                for row in results:
+                    # 处理 None 值和包含逗号的字段
+                    row_str = []
+                    for item in row:
+                        if item is None:
+                            row_str.append("")
+                        elif isinstance(item, str) and ("," in item or "\n" in item):
+                            # 如果包含逗号或换行，用引号包裹
+                            row_str.append(f'"{item}"')
+                        else:
+                            row_str.append(str(item))
+                    output.append(",".join(row_str))
 
-            # 转换为 CSV 格式
-            output = []
-            output.append(",".join(columns))
-            for row in results:
-                # 处理 None 值和包含逗号的字段
-                row_str = []
-                for item in row:
-                    if item is None:
-                        row_str.append("")
-                    elif isinstance(item, str) and ("," in item or "\n" in item):
-                        # 如果包含逗号或换行，用引号包裹
-                        row_str.append(f'"{item}"')
-                    else:
-                        row_str.append(str(item))
-                output.append(",".join(row_str))
+                result = "\n".join(output)
 
-            result = "\n".join(output)
-
-            logger.info(f"查询成功，返回 {len(results)} 条数据")
-            return result
+                logger.info(f"查询成功，返回 {len(results)} 条数据")
+                return result
+            finally:
+                cursor.close()
 
         except Exception as e:
             error_msg = f"查询失败: {str(e)}"
@@ -297,15 +299,12 @@ class HiveQuery:
         return "ok"
 
     def close(self):
-        """关闭连接"""
-        if self.conn:
-            try:
-                self.conn.close()
-                logger.info("查询连接已关闭")
-            except Exception as e:
-                logger.warning(f"关闭查询连接时出错: {e}")
-            finally:
-                self.conn = None
+        """关闭连接（委托给连接池）"""
+        try:
+            hive_pool.close()
+            logger.info("查询连接已关闭")
+        except Exception as e:
+            logger.warning(f"关闭查询连接时出错: {e}")
 
 
 # 默认实例
