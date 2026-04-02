@@ -7,6 +7,7 @@ from tools.hive_query import router as hive_router
 from tools.agent_browser import router as agent_browser_router
 from tools.mysql_query import router as mysql_router
 from tools.memory import Mem0Memory
+from tools.ds_code_search import DataFactoryCodeSearch
 from utils.mcp import mcp
 from utils.logger import logger
 
