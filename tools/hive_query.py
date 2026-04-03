@@ -16,7 +16,7 @@ from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
 from utils.mcp import mcp
-from utils.sql_utils import remove_comments
+from utils.sql_utils import remove_comments, check_sql_type
 
 # 创建路由
 router = APIRouter(prefix="/api/hive", tags=["Hive"])
@@ -98,38 +98,6 @@ class HiveQuery:
         except Exception as e:
             logger.warning(f"SQL 格式化失败，使用原始 SQL: {e}")
             return sql_no_comment.upper()
-
-    def _check_sql_type(self, sql: str) -> str:
-        """
-        检查 SQL 类型是否允许执行
-
-        Args:
-            sql: SQL 语句（已移除注释）
-
-        Returns:
-            "ok" 表示通过，否则返回错误信息
-        """
-        sql_stripped = sql.strip()
-
-        # 检查是否包含禁止的关键字（INSERT、DELETE、DROP）
-        # 忽略 WITH 子句中的 CTAS
-        forbidden_keywords = ['DELETE', 'DROP']
-
-        # 对于非 WITH 开头的语句，检查是否有 INSERT（CTAS 在下面单独处理）
-        if not sql_stripped.upper().startswith('WITH'):
-            if re.search(r'\bINSERT\b', sql_stripped, re.IGNORECASE):
-                return "错误: 不允许执行 INSERT 操作"
-
-        for keyword in forbidden_keywords:
-            if re.search(rf'\b{keyword}\b', sql_stripped, re.IGNORECASE):
-                return f"错误: 不允许执行 {keyword} 操作"
-
-        # 检查是否以允许的关键词开头（SELECT、WITH、REFRESH）
-        # 注意：WITH 后面可能跟着 INSERT（如 WITH temp AS (...) INSERT...），这种情况是允许的 CTE + DML
-        if not re.match(r'^\s*(SELECT|WITH|REFRESH)\s', sql_stripped, re.IGNORECASE):
-            return "错误: 只允许执行 SELECT、WITH、REFRESH 查询"
-
-        return "ok"
 
     def _get_sql_hash(self, sql: str) -> str:
         """
@@ -213,7 +181,7 @@ class HiveQuery:
             sql_no_comment = remove_comments(original_sql)
 
             # 检查 SQL 类型（是否允许执行）
-            type_check_result = self._check_sql_type(sql_no_comment)
+            type_check_result = check_sql_type(sql_no_comment, allowed_prefixes=['SELECT', 'WITH', 'REFRESH'], forbidden_keywords=['INSERT', 'DELETE', 'DROP'])
             if type_check_result != "ok":
                 return type_check_result
 
