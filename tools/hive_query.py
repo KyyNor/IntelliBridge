@@ -16,6 +16,7 @@ from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
 from utils.mcp import mcp
+from utils.sql_utils import remove_comments
 
 # 创建路由
 router = APIRouter(prefix="/api/hive", tags=["Hive"])
@@ -75,24 +76,6 @@ class HiveQuery:
         """获取 Hive 连接（每次从连接池获取，支持自动重连）"""
         return hive_pool.get_connection()
 
-    def _remove_comments(self, sql: str) -> str:
-        """
-        移除 SQL 中的单行注释 (--)
-
-        Args:
-            sql: 原始 SQL 语句
-
-        Returns:
-            移除注释后的 SQL 语句
-        """
-        lines = sql.split('\n')
-        filtered_lines = []
-        for line in lines:
-            # 检测并移除 -- 注释
-            if not line.strip().startswith('--'):
-                filtered_lines.append(line)
-        return '\n'.join(filtered_lines)
-
     def _normalize_sql(self, sql: str) -> str:
         """
         标准化 SQL：移除注释、转大写并格式化
@@ -104,7 +87,7 @@ class HiveQuery:
             标准化后的 SQL 语句
         """
         # 先移除注释
-        sql_no_comment = self._remove_comments(sql)
+        sql_no_comment = remove_comments(sql)
 
         try:
             # 使用 sqlglot 格式化 SQL
@@ -227,7 +210,7 @@ class HiveQuery:
                 return "错误: SQL 语句不能为空"
 
             # 移除注释（用于检查SQL类型）
-            sql_no_comment = self._remove_comments(original_sql)
+            sql_no_comment = remove_comments(original_sql)
 
             # 检查 SQL 类型（是否允许执行）
             type_check_result = self._check_sql_type(sql_no_comment)

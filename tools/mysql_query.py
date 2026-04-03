@@ -12,6 +12,7 @@ from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
 from utils.mcp import mcp
+from utils.sql_utils import remove_comments, check_sql_type
 
 # 创建路由
 router = APIRouter(prefix="/api/mysql", tags=["MySQL"])
@@ -262,9 +263,11 @@ class MySQLQuery:
             if not node:
                 return f"错误: 数据库不存在: {database}"
 
-            # 判断是否为 SELECT 语句
-            if not re.match(r"^\s*SELECT\s", sql, re.IGNORECASE):
-                return "错误: 只允许执行 SELECT 查询"
+            # 移除注释并检查 SQL 类型（支持开头注释，排除 INSERT/DELETE/DROP）
+            sql_no_comment = remove_comments(sql)
+            type_check = check_sql_type(sql_no_comment, allowed_prefixes=['SELECT'], forbidden_keywords=['INSERT', 'DELETE', 'DROP'])
+            if type_check != "ok":
+                return type_check
 
             # 限制返回条数
             limit = max(1, min(limit, self.MAX_LIMIT))
@@ -320,7 +323,7 @@ class MySQLQuery:
 
     def _normalize_sql(self, sql: str) -> str:
         """
-        标准化 SQL：转大写并格式化
+        标准化 SQL：移除注释、转大写并格式化
 
         Args:
             sql: 原始 SQL 语句
@@ -328,13 +331,16 @@ class MySQLQuery:
         Returns:
             标准化后的 SQL 语句
         """
+        # 先移除注释
+        sql_no_comment = remove_comments(sql)
+
         try:
             # 使用 sqlglot 格式化 SQL
-            formatted = sqlglot.parse_one(sql, dialect='mysql').sql(dialect='mysql')
+            formatted = sqlglot.parse_one(sql_no_comment, dialect='mysql').sql(dialect='mysql')
             return formatted
         except Exception as e:
             logger.warning(f"SQL 格式化失败，使用原始 SQL: {e}")
-            return sql
+            return sql_no_comment
 
     def _get_sql_hash(self, sql: str) -> str:
         """
