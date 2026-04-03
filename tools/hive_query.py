@@ -401,11 +401,12 @@ class HiveQuery:
                 count_sql = """
                 SELECT COUNT(*) as cnt
                 FROM TBLS t
+                LEFT JOIN TABLE_PARAMS tp ON t.TBL_ID = tp.TBL_ID AND tp.PARAM_KEY = 'comment'
                 WHERE t.DB_ID = (SELECT DB_ID FROM DBS WHERE NAME = %s)
                 """
                 if table_name:
-                    count_sql += " AND LOWER(t.TBL_NAME) LIKE CONCAT('%%', LOWER(%s), '%%')"
-                    cursor.execute(count_sql, (database, table_name))
+                    count_sql += " AND (LOWER(t.TBL_NAME) LIKE CONCAT('%%', LOWER(%s), '%%') OR LOWER(COALESCE(tp.PARAM_VALUE, '')) LIKE CONCAT('%%', LOWER(%s), '%%'))"
+                    cursor.execute(count_sql, (database, table_name, table_name))
                 else:
                     cursor.execute(count_sql, (database,))
 
@@ -419,9 +420,9 @@ class HiveQuery:
                 WHERE t.DB_ID = (SELECT DB_ID FROM DBS WHERE NAME = %s)
                 """
                 if table_name:
-                    data_sql += " AND LOWER(t.TBL_NAME) LIKE CONCAT('%%', LOWER(%s), '%%')"
+                    data_sql += " AND (LOWER(t.TBL_NAME) LIKE CONCAT('%%', LOWER(%s), '%%') OR LOWER(COALESCE(tp.PARAM_VALUE, '')) LIKE CONCAT('%%', LOWER(%s), '%%'))"
                     data_sql += " ORDER BY t.TBL_NAME LIMIT %s OFFSET %s"
-                    cursor.execute(data_sql, (database, table_name, page_size, offset))
+                    cursor.execute(data_sql, (database, table_name, table_name, page_size, offset))
                 else:
                     data_sql += " ORDER BY t.TBL_NAME LIMIT %s OFFSET %s"
                     cursor.execute(data_sql, (database, page_size, offset))
