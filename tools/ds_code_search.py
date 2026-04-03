@@ -383,13 +383,22 @@ class DataFactoryCodeSearch:
         matches = []
         for cp, info in task_matches.items():
             match_count = len(info["matched_lines"])
-            sample_line = info["matched_lines"][0] if info["matched_lines"] else {}
+
+            # 所有匹配行的上下文（每个匹配行都有自己前后文）
+            all_contexts = [
+                {
+                    "行号": m["行号"],
+                    "代码片段": m["代码片段"]
+                }
+                for m in info["matched_lines"]
+            ]
 
             matches.append({
                 "code_path": cp,
                 "匹配行数": match_count,
                 "行号": [m["行号"] for m in info["matched_lines"]],
-                "代码片段": sample_line.get("代码片段", ""),
+                "所有匹配行上下文": all_contexts,  # 新增：全部匹配行的上下文
+                "代码片段": all_contexts[0]["代码片段"] if all_contexts else "",  # 保持兼容，只留第一个
                 "任务状态": info["任务状态"],
                 "lineage_type": info["lineage_type"],
                 "from_database_table": info["from_tables"],
