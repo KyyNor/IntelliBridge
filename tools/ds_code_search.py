@@ -105,43 +105,70 @@ class DataFactoryCodeSearch:
                 self._index_by_from_table.clear()
                 self._index_by_to_table.clear()
 
-                # 构建缓存和索引
+                # 第一步：按关键字段分组，把相同任务的多条记录合并
+                grouped_tasks = {}  # {(project_name, process_name, task_name, process_status, task_status, sql_code, lineage_type): [rows...]}
+
                 for row in results:
-                    # 把 code_path 当作文件系统路径，如 /ds/ODS/日报工作流/用户表同步
-                    code_path = f"/ds/{row['project_name']}/{row['process_name']}/{row['task_name']}"
+                    # 生成group key
+                    group_key = (
+                        row['project_name'],
+                        row['process_name'],
+                        row['task_name'],
+                        str(row.get('process_status')),
+                        str(row.get('task_status')),
+                        row.get('sql_code', '') or '',
+                        row.get('lineage_type', 'SQL')
+                    )
 
-                    # 解析表清单
-                    from_tables = []
-                    if row.get('from_database_table'):
-                        from_tables = [t.strip() for t in row['from_database_table'].split(',') if t.strip()]
+                    if group_key not in grouped_tasks:
+                        grouped_tasks[group_key] = []
+                    grouped_tasks[group_key].append(row)
 
-                    to_tables = []
-                    if row.get('to_database_table'):
-                        to_tables = [t.strip() for t in row['to_database_table'].split(',') if t.strip()]
+                # 第二步：为每个分组构建缓存对象，合并输入输出表
+                for group_key, rows in grouped_tasks.items():
+                    project_name, process_name, task_name, process_status, task_status, sql_code, lineage_type = group_key
+
+                    # 构造 code_path
+                    code_path = f"/ds/{project_name}/{process_name}/{task_name}"
+
+                    # 合并所有行的输入表（去重）
+                    from_tables_set = set()
+                    to_tables_set = set()
+
+                    for row in rows:
+                        if row.get('from_database_table'):
+                            for t in row['from_database_table'].split(','):
+                                t = t.strip()
+                                if t:
+                                    from_tables_set.add(t)
+                        if row.get('to_database_table'):
+                            for t in row['to_database_table'].split(','):
+                                t = t.strip()
+                                if t:
+                                    to_tables_set.add(t)
+
+                    from_tables = sorted(from_tables_set)  # 转列表并排序，保证一致性
+                    to_tables = sorted(to_tables_set)
 
                     # 按行拆分的代码（便于正则匹配）
-                    sql_code = row.get('sql_code', '') or ''
                     sql_lines = sql_code.split('\n')
 
                     # 计算任务状态
-                    task_status = self.determine_task_status(
-                        str(row.get('process_status')),
-                        str(row.get('task_status'))
-                    )
+                    task_status_value = self.determine_task_status(process_status, task_status)
 
                     # 构建缓存对象
                     task_obj = {
-                        "project_name": row['project_name'],
-                        "process_name": row['process_name'],
-                        "task_name": row['task_name'],
-                        "process_status": str(row.get('process_status')),
-                        "task_status": str(row.get('task_status')),
-                        "lineage_type": row.get('lineage_type', 'SQL'),
+                        "project_name": project_name,
+                        "process_name": process_name,
+                        "task_name": task_name,
+                        "process_status": process_status,
+                        "task_status": task_status,
+                        "lineage_type": lineage_type,
                         "from_database_table": from_tables,
                         "to_database_table": to_tables,
                         "sql_code": sql_code,
                         "sql_lines": sql_lines,
-                        "任务状态": task_status
+                        "任务状态": task_status_value
                     }
 
                     # 存入主缓存（key就是完整的code_path路径字符串）
@@ -204,25 +231,20 @@ class DataFactoryCodeSearch:
         if not filter_path or filter_path == '/ds':
             return True
 
-        # 标准化：去掉 /ds 前缀
-        normalized_full = full_path
-        if normalized_full.startswith('/ds'):
-            normalized_full = normalized_full[3:]
+        # 使用 regex 进行模糊匹配（忽略大小写），而不是拆分路径逐段匹配
+        # 将 filter 转为正则表达式（原样匹配，忽略大小写）
+        escaped_filter = regex.escape(filter_path)
 
-        normalized_filter = filter_path
-        if normalized_filter.startswith('/ds'):
-            normalized_filter = normalized_filter[3:]
-        normalized_filter = normalized_filter.lstrip('/')
+        # 直接在整个路径上进行 regex 搜索（忽略大小写）
+        # 匹配方式：
+        # 1. filter 是路径的前缀
+        # 2. filter 出现在路径的任意位置（模糊匹配）
+        combined_pattern = f"({escaped_filter})|(^/ds/{escaped_filter})"
 
-        # 方案1: 直接前缀匹配
-        if normalized_full.startswith(normalized_filter):
+        # 直接用 regex 做模糊匹配（忽略大小写）
+        # 匹配方式：filter 出现在路径的任意位置
+        if regex.search(escaped_filter, full_path, flags=regex.IGNORECASE):
             return True
-
-        # 方案2: 任意一段路径组件包含 filter（即工作流名或任务名包含关键词）
-        path_parts = normalized_full.split('/')
-        for part in path_parts:
-            if normalized_filter in part:
-                return True
 
         return False
 
@@ -312,9 +334,9 @@ class DataFactoryCodeSearch:
                 if self._cache.get(cp, {}).get("任务状态") == "未上线"
             ]
 
-        # 3. 编译正则表达式
+        # 3. 编译正则表达式（启用忽略大小写匹配）
         try:
-            compiled_regex = regex.compile(pattern)
+            compiled_regex = regex.compile(pattern, flags=regex.IGNORECASE)
         except regex.error as e:
             logger.error(f"正则表达式编译失败: {e}")
             return {"matches": [], "pagination": {}, "error": f"正则表达式错误: {e}"}
@@ -430,19 +452,24 @@ class DataFactoryCodeSearch:
                 if self._match_path(path, code_path):
                     candidate_paths.add(path)
 
-        # 2. 按输入表过滤
+        # 2. 按输入表过滤（regex 直接匹配，忽略大小写）
         if from_table:
             temp = set()
+            escaped = regex.escape(from_table.strip())
+            pattern = regex.compile(escaped, flags=regex.IGNORECASE)
             for table, paths in self._index_by_from_table.items():
-                if from_table.lower() in table.lower():
+                # 直接在整个表名上用 regex 匹配
+                if pattern.search(table):
                     temp.update(paths)
             candidate_paths = candidate_paths.intersection(temp) if candidate_paths else temp
 
-        # 3. 按输出表过滤
+        # 3. 按输出表过滤（regex 直接匹配，忽略大小写）
         if to_table:
             temp = set()
+            escaped = regex.escape(to_table.strip())
+            pattern = regex.compile(escaped, flags=regex.IGNORECASE)
             for table, paths in self._index_by_to_table.items():
-                if to_table.lower() in table.lower():
+                if pattern.search(table):
                     temp.update(paths)
             candidate_paths = candidate_paths.intersection(temp) if candidate_paths else temp
 
