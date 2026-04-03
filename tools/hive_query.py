@@ -70,7 +70,7 @@ class HiveQuery:
 
     def _get_meta_connection(self):
         """获取 Hive 元数据库连接"""
-        return mysql_pool.get_connection("meta_hive_metastore_hive_db")
+        return mysql_pool.get_connection("mysql_80_metastore_hive_db")
 
     def _get_connection(self) -> hive.Connection:
         """获取 Hive 连接（每次从连接池获取，支持自动重连）"""
