@@ -1,12 +1,17 @@
 from pyhive import hive
+import pymysql
 import re
 import hashlib
 import sqlglot
+import json
+import yaml
+from pathlib import Path
 from typing import Optional, List, Tuple
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from utils.hive_pool import hive_pool
+from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
@@ -25,6 +30,17 @@ class QueryRequest(BaseModel):
     limit: Optional[int] = 10
 
 
+class ListDatabaseRequest(BaseModel):
+    blacklist: Optional[List[str]] = []
+
+
+class ListTableRequest(BaseModel):
+    database: str
+    table_name: Optional[str] = ""
+    page: int = 1
+    page_size: int = 50
+
+
 class HiveQuery:
     """Hive 查询工具类"""
 
@@ -36,7 +52,24 @@ class HiveQuery:
 
     def __init__(self):
         """初始化查询工具"""
-        pass
+        # 加载数据库黑名单
+        self._database_blacklist = self._load_blacklist()
+
+    def _load_blacklist(self) -> List[str]:
+        """从配置文件加载黑名单"""
+        config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+        if config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = yaml.safe_load(f)
+                    return cfg.get('hive', {}).get('database_blacklist', [])
+            except Exception as e:
+                logger.warning(f"加载黑名单配置失败: {e}")
+        return []
+
+    def _get_meta_connection(self):
+        """获取 Hive 元数据库连接"""
+        return mysql_pool.get_connection("meta_hive_metastore_hive_db")
 
     def _get_connection(self) -> hive.Connection:
         """获取 Hive 连接（每次从连接池获取，支持自动重连）"""
@@ -298,6 +331,122 @@ class HiveQuery:
 
         return "ok"
 
+    def list_databases(self, extra_blacklist: Optional[List[str]] = None) -> str:
+        """
+        列出所有 Hive 数据库及表数量
+
+        Args:
+            extra_blacklist: 额外的黑名单列表
+
+        Returns:
+            CSV 格式：database_name,table_num
+        """
+        # 合并黑名单：配置文件的 + 传入的
+        blacklist = set(self._database_blacklist)
+        if extra_blacklist:
+            blacklist.update(extra_blacklist)
+
+        try:
+            with self._get_meta_connection() as conn:
+                cursor = conn.cursor(pymysql.cursors.DictCursor)
+                sql = """
+                SELECT d.NAME as db_name, COUNT(t.TBL_ID) as table_num
+                FROM DBS d
+                LEFT JOIN TBLS t ON d.DB_ID = t.DB_ID
+                GROUP BY d.DB_ID, d.NAME
+                ORDER BY d.NAME
+                """
+                cursor.execute(sql)
+                results = cursor.fetchall()
+
+                # 过滤黑名单
+                filtered_results = [
+                    r for r in results
+                    if r['db_name'] not in blacklist
+                ]
+
+                # 转换为 CSV
+                output = ["database_name,table_num"]
+                for row in filtered_results:
+                    output.append(f"{row['db_name']},{row['table_num']}")
+
+                logger.info(f"列出数据库成功，共 {len(filtered_results)} 个")
+                return "\n".join(output)
+        except Exception as e:
+            error_msg = f"列出数据库失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    def list_tables(self, database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> str:
+        """
+        列出指定数据库的表
+
+        Args:
+            database: 数据库名
+            table_name: 模糊搜索的表名
+            page: 页码，从1开始
+            page_size: 每页数量，最大50
+
+        Returns:
+            JSON 格式，含分页信息和表列表
+        """
+        # 限制 page_size 最大为 50
+        page_size = min(page_size, 50)
+        offset = (page - 1) * page_size
+
+        try:
+            with self._get_meta_connection() as conn:
+                cursor = conn.cursor(pymysql.cursors.DictCursor)
+                # 先获取总数
+                count_sql = """
+                SELECT COUNT(*) as cnt
+                FROM TBLS t
+                WHERE t.DB_ID = (SELECT DB_ID FROM DBS WHERE NAME = %s)
+                """
+                if table_name:
+                    count_sql += " AND LOWER(t.TBL_NAME) LIKE CONCAT('%%', LOWER(%s), '%%')"
+                    cursor.execute(count_sql, (database, table_name))
+                else:
+                    cursor.execute(count_sql, (database,))
+
+                total = cursor.fetchone()['cnt']
+
+                # 再获取分页数据
+                data_sql = """
+                SELECT t.TBL_NAME, COALESCE(tp.PARAM_VALUE, '') as table_comment
+                FROM TBLS t
+                LEFT JOIN TABLE_PARAMS tp ON t.TBL_ID = tp.TBL_ID AND tp.PARAM_KEY = 'comment'
+                WHERE t.DB_ID = (SELECT DB_ID FROM DBS WHERE NAME = %s)
+                """
+                if table_name:
+                    data_sql += " AND LOWER(t.TBL_NAME) LIKE CONCAT('%%', LOWER(%s), '%%')"
+                    data_sql += " ORDER BY t.TBL_NAME LIMIT %s OFFSET %s"
+                    cursor.execute(data_sql, (database, table_name, page_size, offset))
+                else:
+                    data_sql += " ORDER BY t.TBL_NAME LIMIT %s OFFSET %s"
+                    cursor.execute(data_sql, (database, page_size, offset))
+
+                tables = cursor.fetchall()
+
+                # 构建返回结果
+                result = {
+                    "database": database,
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "tables": [
+                        {"table_name": t["TBL_NAME"], "table_comment": t["table_comment"]}
+                        for t in tables
+                    ]
+                }
+
+                logger.info(f"列出表成功: {database}, 共 {total} 个表")
+                return json.dumps(result, ensure_ascii=False, indent=2)
+        except Exception as e:
+            error_msg = f"列出表失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
     def close(self):
         """关闭连接（委托给连接池）"""
         try:
@@ -323,6 +472,25 @@ async def describe_table(request: DescribeRequest):
 async def query_hive_data(request: QueryRequest):
     """查询 Hive 数据"""
     result = hive_query.query_data(request.sql, request.limit)
+    return {"data": result}
+
+
+@router.post("/list-databases")
+async def list_databases(request: ListDatabaseRequest):
+    """列出所有 Hive 数据库及表数量"""
+    result = hive_query.list_databases(request.blacklist)
+    return {"data": result}
+
+
+@router.post("/list-tables")
+async def list_tables(request: ListTableRequest):
+    """列出指定数据库的表"""
+    result = hive_query.list_tables(
+        request.database,
+        request.table_name,
+        request.page,
+        request.page_size
+    )
     return {"data": result}
 
 
@@ -356,3 +524,33 @@ def hive_query_tool(sql: str, limit: int = 10) -> str:
         CSV 格式的查询结果
     """
     return hive_query.query_data(sql, limit)
+
+
+@mcp.tool()
+@log_function_info
+def hive_list_databases() -> str:
+    """
+    列出所有 Hive 数据库及表数量，支持黑名单过滤
+
+    Returns:
+        CSV 格式：database_name,table_num
+    """
+    return hive_query.list_databases()
+
+
+@mcp.tool()
+@log_function_info
+def hive_list_tables(database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> str:
+    """
+    列出指定数据库的表，支持模糊搜索和分页
+
+    Args:
+        database: 数据库名称
+        table_name: 模糊搜索的表名（忽略大小写）
+        page: 页码，从1开始
+        page_size: 每页数量，默认50，最大50
+
+    Returns:
+        JSON 格式，含分页信息和表列表
+    """
+    return hive_query.list_tables(database, table_name, page, page_size)

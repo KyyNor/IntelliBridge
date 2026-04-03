@@ -6,6 +6,16 @@ hive:
   port: 10000
   username: "hive"
   database: "default"
+  # 数据库黑名单（list_databases 时不返回这些数据库）
+  database_blacklist:
+    - default
+    - global_temp
+    - hxb_dh_data_b
+    - hxb_dh_data_i
+    - hxb_dh_data_m
+    - hxb_dh_data_tmp
+    - hxb_dh_data_dm
+    - test
 
 # Agent Browser 配置
 agent_browser:
