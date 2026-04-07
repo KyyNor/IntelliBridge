@@ -8,7 +8,9 @@ from pydantic import BaseModel
 from utils.config import config
 from utils.logger import logger
 from utils.decorators import log_function_info
-from utils.mcp import mcp
+from fastmcp import FastMCP
+
+agent_browser_mcp = FastMCP("IntelliBridge AgentBrowser")
 
 # 创建路由（单接口直接挂在 /api 下）
 router = APIRouter(tags=["Agent"])
@@ -204,7 +206,7 @@ async def execute_agent_browser(request: AgentBrowserRequest):
 
 
 # MCP 工具
-@mcp.tool()
+@agent_browser_mcp.tool()
 @log_function_info
 def agent_browser_tool(session_name: str, command: str) -> str:
     """

@@ -11,8 +11,12 @@ from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
-from utils.mcp import mcp
 from utils.sql_utils import remove_comments, check_sql_type
+
+from fastmcp import FastMCP
+
+mysql_mcp = FastMCP("IntelliBridge Mysql")
+
 
 # 创建路由
 router = APIRouter(prefix="/api/mysql", tags=["MySQL"])
@@ -390,7 +394,7 @@ async def query_mysql_data(request: QueryRequest):
 
 # ==================== MCP 工具 ====================
 
-@mcp.tool()
+@mysql_mcp.tool()
 @log_function_info
 def mysql_list_databases() -> str:
     """
@@ -404,7 +408,7 @@ def mysql_list_databases() -> str:
     return mysql_query.list_databases()
 
 
-@mcp.tool()
+@mysql_mcp.tool()
 @log_function_info
 def mysql_search_tables(database: str, keyword: str = "") -> str:
     """
@@ -420,7 +424,7 @@ def mysql_search_tables(database: str, keyword: str = "") -> str:
     return mysql_query.search_tables(database, keyword)
 
 
-@mcp.tool()
+@mysql_mcp.tool()
 @log_function_info
 def mysql_describe(database: str, table_name: str) -> str:
     """
@@ -436,7 +440,7 @@ def mysql_describe(database: str, table_name: str) -> str:
     return mysql_query.describe_table(database, table_name)
 
 
-@mcp.tool()
+@mysql_mcp.tool()
 @log_function_info
 def mysql_query_tool(database: str, sql: str, limit: int = 10) -> str:
     """

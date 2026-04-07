@@ -251,13 +251,13 @@ def memory_add(
     添加记忆
 
     Args:
-        user_id: 当前系统登录用户名,使用whoami命令获取
         content: 记忆内容,可传递长文本
 
     Returns:
         JSON 格式的添加结果
     """
     user_id = headers.get("x-user-id", "anonymous")
+    logger.info(f"已获取 user_id :{user_id}")
     result = mem.add(user_id, content)
     return json.dumps(result, ensure_ascii=False, indent=2)
 

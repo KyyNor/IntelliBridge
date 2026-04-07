@@ -15,8 +15,11 @@ from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
-from utils.mcp import mcp
 from utils.sql_utils import remove_comments, check_sql_type
+
+from fastmcp import FastMCP
+
+hive_mcp = FastMCP("IntelliBridge Hive")
 
 # 创建路由
 router = APIRouter(prefix="/api/hive", tags=["Hive"])
@@ -447,7 +450,7 @@ async def list_tables(request: ListTableRequest):
 
 
 # MCP 工具
-@mcp.tool()
+@hive_mcp.tool()
 @log_function_info
 def hive_describe(table_name: str) -> str:
     """
@@ -462,7 +465,7 @@ def hive_describe(table_name: str) -> str:
     return hive_query.describe_table(table_name)
 
 
-@mcp.tool()
+@hive_mcp.tool()
 @log_function_info
 def hive_query_tool(sql: str, limit: int = 10) -> str:
     """
@@ -478,7 +481,7 @@ def hive_query_tool(sql: str, limit: int = 10) -> str:
     return hive_query.query_data(sql, limit)
 
 
-@mcp.tool()
+@hive_mcp.tool()
 @log_function_info
 def hive_list_databases() -> str:
     """
@@ -490,7 +493,7 @@ def hive_list_databases() -> str:
     return hive_query.list_databases()
 
 
-@mcp.tool()
+@hive_mcp.tool()
 @log_function_info
 def hive_list_tables(database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> str:
     """

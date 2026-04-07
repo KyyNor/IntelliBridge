@@ -1,24 +1,21 @@
 import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastmcp import FastMCP
+from fastmcp.utilities.lifespan import combine_lifespans
 import uvicorn
 
-from tools.hive_query import router as hive_router
-from tools.agent_browser import router as agent_browser_router
-from tools.mysql_query import router as mysql_router
+from tools.hive_query import hive_mcp, router as hive_router
+from tools.agent_browser import agent_browser_mcp,router as agent_browser_router
+from tools.mysql_query import mysql_mcp,router as mysql_router
 from tools.memory import Memory, memory_mcp
-from tools.ds_code_search import DataFactoryCodeSearch
-from utils.mcp import mcp
+from tools.ds_code_search import ds_search_mcp, DataFactoryCodeSearch
 from utils.logger import logger
 
-mcp = FastMCP("IntelliBridge")
-mcp.mount(
-    memory_mcp,
-    namespace='memory'
-)
-
-mcp_app = mcp.http_app(path='/mcp')
+memory_mcp_app = memory_mcp.http_app(path='/mcp/memory')
+hive_mcp_app = hive_mcp.http_app(path='/mcp/hive')
+mysql_mcp_app = mysql_mcp.http_app(path='/mcp/mysql')
+ds_search_mcp_app = ds_search_mcp.http_app(path='/mcp/ds_search')
+agent_browser_mcp_app = agent_browser_mcp.http_app(path='/mcp/agent_browser')
 
 app = FastAPI(
     title="IntelliBridge API",
@@ -55,10 +52,20 @@ combined_app = FastAPI(
     title="IntelliBridge",
     description="IntelliBridge Service",
     routes=[
-        *mcp_app.routes,
         *app.routes,
+        *memory_mcp_app.routes,
+        *hive_mcp_app.routes,
+        *mysql_mcp_app.routes,
+        *ds_search_mcp_app.routes,
+        *agent_browser_mcp_app.routes,
     ],
-    lifespan=mcp_app.lifespan,
+    lifespan=combine_lifespans(
+        memory_mcp_app.lifespan,
+        hive_mcp_app.lifespan,
+        mysql_mcp_app.lifespan,
+        ds_search_mcp_app.lifespan,
+        agent_browser_mcp_app.lifespan,
+    ),
 )
 
 async def main():
