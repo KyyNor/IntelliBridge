@@ -1,7 +1,7 @@
 #!/bin/bash
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+DATA_PATH=/home/bdapp/intellibridge_data
+cd "$DATA_PATH"
 
 # 重启 intellibridge 服务
 echo "Restarting intellibridge service..."
