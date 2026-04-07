@@ -17,7 +17,6 @@ from mem0.llms.configs import LlmConfig
 from mem0.configs.base import RerankerConfig
 
 from prompts.memory_prompts import MEMORY_FACT_EXTRACTION_PROMPT
-from utils.mcp import mcp
 from utils.decorators import log_function_info
 from utils.config import config
 from utils.logger import logger
@@ -27,7 +26,7 @@ from fastmcp.dependencies import CurrentHeaders
 
 memory_mcp = FastMCP("IntelliBridge Memory")
 
-class Memory:
+class Mem0Memory:
     """
     Mem0 记忆客户端封装类
     """
@@ -237,12 +236,12 @@ class Memory:
 
 
 # 全局实例
-mem = Memory()
+mem = Mem0Memory()
 
 
 # ==================== MCP 工具函数 ====================
 
-@mcp.tool()
+@memory_mcp.tool()
 @log_function_info
 def memory_add(
     content: str,
@@ -263,7 +262,7 @@ def memory_add(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-@mcp.tool()
+@memory_mcp.tool()
 @log_function_info
 def memory_search(
     user_id: str,
@@ -285,7 +284,7 @@ def memory_search(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-@mcp.tool()
+@memory_mcp.tool()
 @log_function_info
 def memory_delete(memory_id: str) -> str:
     """
@@ -301,7 +300,7 @@ def memory_delete(memory_id: str) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-@mcp.tool()
+@memory_mcp.tool()
 @log_function_info
 def memory_update(memory_id: str, content: str) -> str:
     """

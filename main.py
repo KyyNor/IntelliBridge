@@ -1,6 +1,7 @@
 import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastmcp.utilities.lifespan import combine_lifespans
 import uvicorn
 
 from tools.hive_query import router as hive_router
@@ -53,7 +54,10 @@ combined_app = FastAPI(
         *app.routes,
         *memory_mcp_app.routes,
     ],
-    lifespan=mcp_app.lifespan,
+    lifespan=combine_lifespans(
+        mcp_app.lifespan,
+        memory_mcp_app.lifespan,
+    ),
 )
 
 async def main():
