@@ -58,8 +58,7 @@ mysql:
 memory:
   # Qdrant 向量存储配置
   qdrant:
-    host: "localhost"
-    port: 6333
+    url: "http://localhost:6333"
     api_key: ""
     path: "/app/data/qdrant"
     collection_name: "intellibridge_memory"

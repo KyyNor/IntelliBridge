@@ -12,10 +12,8 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
     depends_on:
-      qdrant:
-        condition: service_healthy
-      neo4j:
-        condition: service_healthy
+      - qdrant
+      - neo4j
     restart: unless-stopped
 
   qdrant:
@@ -27,11 +25,6 @@ services:
     volumes:
       - ./qdrant_storage:/qdrant/storage
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
 
   neo4j:
     image: neo4j:latest
@@ -45,8 +38,3 @@ services:
       - ./neo4j_data:/data
       - ./neo4j_logs:/logs
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:7474 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
