@@ -1,3 +1,4 @@
+import json
 import re
 import hashlib
 from typing import Optional
@@ -51,21 +52,42 @@ class MySQLQuery:
         """初始化查询工具"""
         pass
 
-    def list_databases(self) -> str:
+    def list_databases(self, as_json: bool = False):
         """
         列出所有可用的数据库
 
+        Args:
+            as_json: 是否返回 JSON 格式，默认 False 返回 CSV 格式
+
         Returns:
-            CSV 格式的数据库列表（数据库标识符,描述）
+            CSV 格式（默认）或 JSON 格式的数据库列表
         """
         try:
             # 从连接池获取数据库列表
             databases = mysql_pool.get_database_list()
 
             if not databases:
-                return "错误: 没有可用的数据库"
+                return "错误: 没有可用的数据库" if not as_json else json.dumps({"error": "没有可用的数据库"}, ensure_ascii=False)
 
-            logger.info(f"获取数据库列表成功: {len(databases) - 1} 个数据库")
+            # 第一行是标题，跳过
+            db_lines = databases[1:] if databases else []
+
+            if as_json:
+                # 返回 JSON 格式
+                db_list = []
+                for line in db_lines:
+                    parts = line.split(",", 1)
+                    if len(parts) == 2:
+                        db_list.append({"database": parts[0], "description": parts[1]})
+                    elif parts:
+                        db_list.append({"database": parts[0], "description": ""})
+
+                result = {"databases": db_list, "total": len(db_list)}
+                logger.info(f"获取数据库列表成功: {len(db_list)} 个数据库")
+                return json.dumps(result, ensure_ascii=False, indent=2)
+
+            # 返回 CSV 格式
+            logger.info(f"获取数据库列表成功: {len(db_lines)} 个数据库")
             return '\n'.join(databases)
 
         except Exception as e:
@@ -176,7 +198,9 @@ class MySQLQuery:
             # 验证数据库是否存在
             node = mysql_pool.get_node_by_database(database)
             if not node:
-                return f"错误: 数据库不存在: {database}"
+                # 返回可用数据库列表
+                available_dbs = self.list_databases()
+                return f"错误: 数据库不存在: {database}\n\n可用数据库:\n{available_dbs}"
 
             cache_key = f"mysql:describe:{database}:{table_name}"
 
@@ -242,7 +266,9 @@ class MySQLQuery:
             error_msg = f"查询表结构失败: {str(e)}"
             detail = traceback.format_exc()
             logger.error(f"{error_msg}\n{detail}")
-            return error_msg
+            # 返回可用数据库列表
+            available_dbs = self.list_databases()
+            return f"{error_msg}\n\n可用数据库:\n{available_dbs}"
 
     def query_data(self, database: str, sql: str, limit: int = 10) -> str:
         """

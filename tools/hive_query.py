@@ -127,9 +127,17 @@ class HiveQuery:
         try:
             # 解析库名和表名
             if "." not in table_full_name:
-                return "错误: 表名格式不正确，应为 '库名.表名'"
+                # 返回可用数据库列表供用户参考
+                available_dbs = self.list_databases()
+                return f"错误: 表名格式不正确，应为 '库名.表名'\n\n可用数据库:\n{available_dbs}"
 
             database, table = table_full_name.strip().split(".", 1)
+
+            # 先检查数据库是否存在
+            available_dbs = self.list_databases()
+            db_list = [line.split(",")[0] for line in available_dbs.split("\n")[1:] if line]
+            if database not in db_list:
+                return f"错误: 数据库 '{database}' 不存在\n\n可用数据库:\n{available_dbs}"
 
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -161,7 +169,9 @@ class HiveQuery:
         except Exception as e:
             error_msg = f"查询表结构失败: {str(e)}"
             logger.error(error_msg)
-            return error_msg
+            # 也返回可用数据库列表
+            available_dbs = self.list_databases()
+            return f"{error_msg}\n\n可用数据库:\n{available_dbs}"
 
     def query_data(self, sql: str, limit: int = 10) -> str:
         """
