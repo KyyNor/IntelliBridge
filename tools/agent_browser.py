@@ -206,7 +206,7 @@ async def execute_agent_browser(request: AgentBrowserRequest):
 
 
 # MCP 工具
-@agent_browser_mcp.tool()
+@agent_browser_mcp.tool(name="use_browser")
 @log_function_info
 def agent_browser_tool(session_name: str, command: str) -> str:
     """

@@ -394,7 +394,7 @@ async def query_mysql_data(request: QueryRequest):
 
 # ==================== MCP 工具 ====================
 
-@mysql_mcp.tool()
+@mysql_mcp.tool(name="list_databases")
 @log_function_info
 def mysql_list_databases() -> str:
     """
@@ -408,7 +408,7 @@ def mysql_list_databases() -> str:
     return mysql_query.list_databases()
 
 
-@mysql_mcp.tool()
+@mysql_mcp.tool(name="search_tables")
 @log_function_info
 def mysql_search_tables(database: str, keyword: str = "") -> str:
     """
@@ -424,7 +424,7 @@ def mysql_search_tables(database: str, keyword: str = "") -> str:
     return mysql_query.search_tables(database, keyword)
 
 
-@mysql_mcp.tool()
+@mysql_mcp.tool(name="describe")
 @log_function_info
 def mysql_describe(database: str, table_name: str) -> str:
     """
@@ -440,7 +440,7 @@ def mysql_describe(database: str, table_name: str) -> str:
     return mysql_query.describe_table(database, table_name)
 
 
-@mysql_mcp.tool()
+@mysql_mcp.tool(name="query")
 @log_function_info
 def mysql_query_tool(database: str, sql: str, limit: int = 10) -> str:
     """

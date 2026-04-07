@@ -450,7 +450,7 @@ async def list_tables(request: ListTableRequest):
 
 
 # MCP 工具
-@hive_mcp.tool()
+@hive_mcp.tool(name="describe")
 @log_function_info
 def hive_describe(table_name: str) -> str:
     """
@@ -465,7 +465,7 @@ def hive_describe(table_name: str) -> str:
     return hive_query.describe_table(table_name)
 
 
-@hive_mcp.tool()
+@hive_mcp.tool(name="query")
 @log_function_info
 def hive_query_tool(sql: str, limit: int = 10) -> str:
     """
@@ -481,7 +481,7 @@ def hive_query_tool(sql: str, limit: int = 10) -> str:
     return hive_query.query_data(sql, limit)
 
 
-@hive_mcp.tool()
+@hive_mcp.tool(name="list_databases")
 @log_function_info
 def hive_list_databases() -> str:
     """
@@ -493,7 +493,7 @@ def hive_list_databases() -> str:
     return hive_query.list_databases()
 
 
-@hive_mcp.tool()
+@hive_mcp.tool(name="list_tables")
 @log_function_info
 def hive_list_tables(database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> str:
     """

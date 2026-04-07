@@ -257,7 +257,7 @@ mem = Mem0Memory()
 
 # ==================== MCP 工具函数 ====================
 
-@memory_mcp.tool()
+@memory_mcp.tool(name="add")
 @log_function_info
 def memory_add(
     content: str,
@@ -278,7 +278,7 @@ def memory_add(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-@memory_mcp.tool()
+@memory_mcp.tool(name="search")
 @log_function_info
 def memory_search(
     query: str,
@@ -301,7 +301,7 @@ def memory_search(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-@memory_mcp.tool()
+@memory_mcp.tool(name="delete")
 @log_function_info
 def memory_delete(memory_id: str) -> str:
     """
@@ -317,7 +317,7 @@ def memory_delete(memory_id: str) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-@memory_mcp.tool()
+@memory_mcp.tool(name="update")
 @log_function_info
 def memory_update(memory_id: str, content: str) -> str:
     """

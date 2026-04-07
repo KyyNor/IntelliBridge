@@ -538,7 +538,7 @@ ds_code_search = DataFactoryCodeSearch()
 
 # ==================== MCP 工具 ====================
 
-@ds_search_mcp.tool()
+@ds_search_mcp.tool(name="sql")
 @log_function_info
 def datafactory_sql_search(
     pattern: str,
@@ -591,7 +591,7 @@ def datafactory_sql_search(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-@ds_search_mcp.tool()
+@ds_search_mcp.tool(name="task_info")
 @log_function_info
 def datafactory_task_info(
     code_path: Optional[str] = None,
