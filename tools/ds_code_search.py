@@ -289,6 +289,9 @@ class DataFactoryCodeSearch:
 
     # ========== Task 4: 基于缓存实现 datafactory_sql_search ==========
 
+    # 最大上下文行数限制，防止返回过多内容超出上下文范围
+    MAX_TOTAL_CONTEXT_LINES = 100
+
     def search_sql_codes(
         self,
         pattern: str,
@@ -297,7 +300,7 @@ class DataFactoryCodeSearch:
         after: int = 0,
         code_status: str = "已上线",
         page: int = 1,
-        page_size: int = 50
+        page_size: int = 20
     ) -> Dict[str, Any]:
         """
         搜索 SQL 代码（基于内存缓存）
@@ -305,8 +308,8 @@ class DataFactoryCodeSearch:
         Args:
             pattern: 正则表达式
             code_path: 路径过滤（作为字符串前缀/包含匹配）
-            before: 匹配行前的行数
-            after: 匹配行后的行数
+            before: 匹配行前的行数（最大50行）
+            after: 匹配行后的行数（最大50行）
             code_status: 状态过滤
             page: 页码
             page_size: 每页条数
@@ -314,6 +317,19 @@ class DataFactoryCodeSearch:
         Returns:
             包含 matches 和 pagination 的字典
         """
+        # 限制上下文行数，总共最多100行
+        before = max(before, 0)
+        after = max(after, 0)
+        total = before + after
+        if total > self.MAX_TOTAL_CONTEXT_LINES:
+            # 按比例压缩到100行
+            scale = self.MAX_TOTAL_CONTEXT_LINES / total
+            before = int(before * scale)
+            after = self.MAX_TOTAL_CONTEXT_LINES - before
+
+        # 限制 page_size 最多50
+        page_size = min(max(page_size, 1), 50)
+
         # 确保缓存已加载
         self.ensure_cache()
         logger.info(f"开始搜索: pattern={pattern}, code_path={code_path}, code_status={code_status}")
@@ -531,7 +547,7 @@ def datafactory_sql_search(
     after: int = 0,
     code_status: str = "已上线",
     page: int = 1,
-    page_size: int = 50
+    page_size: int = 20
 ) -> str:
     """
     数据工厂代码检索工具
@@ -548,11 +564,11 @@ def datafactory_sql_search(
         code_path: 路径筛选，限定搜索范围，支持：
                    - 前缀匹配：如 "/ds/公共每日跑批/" 搜索该目录下所有任务
                    - 关键词匹配：如 "对公有效户" 会匹配路径中任意层级包含该关键词的任务
-        before: 整数，匹配行往前显示的行数，用于查看上下文（可选，默认0）
-        after: 整数，匹配行往后显示的行数，用于查看上下文（可选，默认0）
+        before: 整数，匹配行往前显示的行数，用于查看上下文（可选，默认0，最大50行）
+        after: 整数，匹配行往后显示的行数，用于查看上下文（可选，默认0，最大50行，总计不超过100行）
         code_status: 状态过滤，可选 "已上线"(默认)、"未上线"，只会返回相应状态的任务
         page: 页码，从1开始（可选，默认1）
-        page_size: 每页返回的任務數，默认50条，最大1000（可选）
+        page_size: 每页返回的任务数，默认20条，最多50（可选）
 
     Returns:
         JSON 格式的搜索结果，包含：
