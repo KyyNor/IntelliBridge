@@ -32,7 +32,7 @@ RUN pip install --no-cache-dir -i ${PYTHON_PIP_INDEX_URL} -r requirements.txt
 COPY . .
 
 # 暴露端口
-EXPOSE 49000 49001
+EXPOSE 49000
 
 # 运行应用
 # CMD sh -c "agent-browser --session startup --session-name startup --cdp http://browserless:3000 open http://125.1.129.76:8080/fr/ && python main.py"

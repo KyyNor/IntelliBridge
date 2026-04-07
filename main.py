@@ -17,10 +17,7 @@ app = FastAPI(
     title="IntelliBridge API",
     description="IntelliBridge Backend Service",
     version="1.0.0",
-    lifespan=mcp_app.lifespan
 )
-
-app.mount("/mcp", mcp_app)
 
 # CORS middleware
 app.add_middleware(
@@ -47,6 +44,15 @@ app.include_router(hive_router)
 app.include_router(agent_browser_router)
 app.include_router(mysql_router)
 
+combined_app = FastAPI(
+    title="IntelliBridge",
+    description="IntelliBridge Service",
+    routes=[
+        *mcp_app.routes,
+        *app.routes,
+    ],
+    lifespan=mcp_app.lifespan,
+)
 
 async def main():
     """IntelliBridge服务启动"""
@@ -54,7 +60,7 @@ async def main():
     logger.info(f"FastAPI: http://0.0.0.0:49000")
     logger.info(f"MCP: http://0.0.0.0:49000/mcp")
 
-    config = uvicorn.Config(app, host="0.0.0.0", port=49000, log_level="info")
+    config = uvicorn.Config(combined_app, host="0.0.0.0", port=49000, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
 

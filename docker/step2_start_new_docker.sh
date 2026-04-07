@@ -13,7 +13,6 @@ docker run -d \
     --name intellibridge \
     --restart unless-stopped \
     -p 49000:49000 \
-    -p 49005:49001 \
     -e MEM0_TELEMETRY=False \
     -v $DATA_PATH/cache:/app/cache \
     -v $DATA_PATH/logs:/app/logs \
