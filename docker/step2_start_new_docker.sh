@@ -1,24 +1,13 @@
 #!/bin/bash
 
-DATA_PATH=/home/bdapp/intellibridge_data
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# 停止并删除已有容器
-echo "Stopping existing container..."
-docker stop intellibridge 2>/dev/null || true
-docker rm intellibridge 2>/dev/null || true
-
-# 启动新容器
-echo "Starting new container..."
-docker run -d \
-    --name intellibridge \
-    --restart unless-stopped \
-    -p 49000:49000 \
-    -e MEM0_TELEMETRY=False \
-    -v $DATA_PATH/cache:/app/cache \
-    -v $DATA_PATH/logs:/app/logs \
-    -v $DATA_PATH/config:/app/config \
-    -v $DATA_PATH/data:/app/data \
-    intellibridge:latest
+# 重启 intellibridge 服务
+echo "Restarting intellibridge service..."
+docker-compose stop intellibridge
+docker-compose rm -f intellibridge
+docker-compose up -d intellibridge
 
 # 清理1天以前的dangling镜像（none标签）
 echo "Cleaning up old dangling images (none tag, older than 24h)..."
@@ -26,4 +15,4 @@ docker image prune -f --filter "dangling=true" --filter "until=24h"
 
 echo "Done!"
 
-docker logs -f intellibridge
+docker-compose logs -f intellibridge

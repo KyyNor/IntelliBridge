@@ -26,7 +26,8 @@ RUN npm install -g agent-browser && \
 COPY requirements.txt .
 
 # 使用指定的镜像源安装 Python 依赖
-RUN pip install --no-cache-dir -i ${PYTHON_PIP_INDEX_URL} -r requirements.txt
+RUN pip install --no-cache-dir -i ${PYTHON_PIP_INDEX_URL} -r requirements.txt && \
+    pip install --no-cache-dir -i ${PYTHON_PIP_INDEX_URL} apache-age-python --no-deps
 
 # 复制应用代码
 COPY . .

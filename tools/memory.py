@@ -290,7 +290,6 @@ def memory_search(
     搜索记忆
 
     Args:
-        user_id: 当前系统登录用户名,使用whoami命令获取
         query: 查询内容
         limit: 返回结果数量（默认 5）
 
