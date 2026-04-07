@@ -6,12 +6,13 @@ import uvicorn
 from tools.hive_query import router as hive_router
 from tools.agent_browser import router as agent_browser_router
 from tools.mysql_query import router as mysql_router
-from tools.memory import Mem0Memory
+from tools.memory import Memory, memory_mcp
 from tools.ds_code_search import DataFactoryCodeSearch
 from utils.mcp import mcp
 from utils.logger import logger
 
 mcp_app = mcp.http_app(path='/mcp')
+memory_mcp_app = memory_mcp.http_app(path='/memory/mcp')
 
 app = FastAPI(
     title="IntelliBridge API",
@@ -50,6 +51,7 @@ combined_app = FastAPI(
     routes=[
         *mcp_app.routes,
         *app.routes,
+        *memory_mcp_app.routes,
     ],
     lifespan=mcp_app.lifespan,
 )

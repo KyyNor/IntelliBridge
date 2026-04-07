@@ -22,8 +22,12 @@ from utils.decorators import log_function_info
 from utils.config import config
 from utils.logger import logger
 
+from fastmcp import FastMCP
+from fastmcp.dependencies import CurrentHeaders
 
-class Mem0Memory:
+memory_mcp = FastMCP("IntelliBridge Memory")
+
+class Memory:
     """
     Mem0 记忆客户端封装类
     """
@@ -233,7 +237,7 @@ class Mem0Memory:
 
 
 # 全局实例
-mem = Mem0Memory()
+mem = Memory()
 
 
 # ==================== MCP 工具函数 ====================
@@ -241,8 +245,8 @@ mem = Mem0Memory()
 @mcp.tool()
 @log_function_info
 def memory_add(
-    user_id: str,
-    content: str
+    content: str,
+    headers: dict = CurrentHeaders()
 ) -> str:
     """
     添加记忆
@@ -254,6 +258,7 @@ def memory_add(
     Returns:
         JSON 格式的添加结果
     """
+    user_id = headers.get("x-user-id", "anonymous")
     result = mem.add(user_id, content)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
