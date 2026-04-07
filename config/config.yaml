@@ -85,3 +85,10 @@ memory:
     api_key: "sk-test-key"
     model: "qwen2.5"
     top_k: 10
+
+  graph:
+    provider: "neo4j"
+    base_url: "bolt://neo4j:7687"
+    username: "neo4j"
+    password: "mem0graph"
+

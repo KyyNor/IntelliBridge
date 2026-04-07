@@ -15,6 +15,7 @@ from mem0.configs.base import VectorStoreConfig
 from mem0.embeddings.configs import EmbedderConfig
 from mem0.llms.configs import LlmConfig
 from mem0.configs.base import RerankerConfig
+from mem0.graphs.configs import GraphStoreConfig
 
 from prompts.memory_prompts import MEMORY_FACT_EXTRACTION_PROMPT
 from utils.decorators import log_function_info
@@ -56,6 +57,7 @@ class Mem0Memory:
             embedding_config = memory_config.get("embedding", {})
             llm_config = memory_config.get("llm", {})
             reranker_config = memory_config.get("reranker", {})
+            graph_config = memory_config.get("graph", {})
 
             # 构建 Embedder 配置 (使用 OpenAI 兼容格式)
             embedder_cfg = EmbedderConfig(
@@ -72,10 +74,12 @@ class Mem0Memory:
             vector_store_cfg = VectorStoreConfig(
                 provider="qdrant",
                 config={
+                    "host" : qdrant_config.get("host", "localhost"),
+                    "port" : qdrant_config.get("port", 6333),
+                    "api_key" : qdrant_config.get("api_key", ""),
                     "collection_name" : qdrant_config.get("collection_name", "intellibridge_memory"),
-                    "path" : qdrant_config.get("path", "/app/data/qdrant"),
                     "embedding_model_dims" : embedding_config.get("dimension", 1024),
-                    "on_disk": True
+                    "on_disk": True,
                 }
             )
 
@@ -105,13 +109,26 @@ class Mem0Memory:
                     } if reranker_config.get("provider") == "llm_reranker" else None
                 )
 
+            graph_cfg = None
+            if graph_config:
+                graph_cfg = GraphStoreConfig(
+                    provider=graph_config.get("provider", "neo4j"),
+                    config={
+                        "url": graph_config.get("url", "neo4j"),
+                        "username": graph_config.get("username", "neo4j"),
+                        "password": graph_config.get("password", "neo4j"),
+                    }
+                )
+
             # 构建 MemoryConfig
             mem_cfg = MemoryConfig(
                 embedder=embedder_cfg,
                 vector_store=vector_store_cfg,
                 llm=llm_cfg,
                 # reranker=reranker_cfg,
+                graph_store=graph_cfg,
                 custom_fact_extraction_prompt=MEMORY_FACT_EXTRACTION_PROMPT,
+                history_db_path="/app/data/memory_history.db",
             )
             # 暂时不使用reranker服务，因为mem0ai并不支持xinference提供的reranker api
 
@@ -265,8 +282,8 @@ def memory_add(
 @memory_mcp.tool()
 @log_function_info
 def memory_search(
-    user_id: str,
     query: str,
+    headers: dict = CurrentHeaders(),
     limit: int = 5
 ) -> str:
     """
@@ -280,6 +297,8 @@ def memory_search(
     Returns:
         JSON 格式的搜索结果
     """
+    user_id = headers.get("x-user-id", "anonymous")
+    logger.info(f"已获取 user_id :{user_id}")
     result = mem.search(user_id, query, limit)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
