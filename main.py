@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastmcp.utilities.lifespan import combine_lifespans
+from fastmcp import FastMCP
 import uvicorn
 
 from tools.hive_query import router as hive_router
@@ -12,8 +12,13 @@ from tools.ds_code_search import DataFactoryCodeSearch
 from utils.mcp import mcp
 from utils.logger import logger
 
+mcp = FastMCP("IntelliBridge")
+mcp.mount(
+    memory_mcp,
+    namespace='memory'
+)
+
 mcp_app = mcp.http_app(path='/mcp')
-memory_mcp_app = memory_mcp.http_app(path='/memory/mcp')
 
 app = FastAPI(
     title="IntelliBridge API",
@@ -52,12 +57,8 @@ combined_app = FastAPI(
     routes=[
         *mcp_app.routes,
         *app.routes,
-        *memory_mcp_app.routes,
     ],
-    lifespan=combine_lifespans(
-        mcp_app.lifespan,
-        memory_mcp_app.lifespan,
-    ),
+    lifespan=mcp_app.lifespan,
 )
 
 async def main():
