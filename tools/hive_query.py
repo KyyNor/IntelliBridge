@@ -142,11 +142,8 @@ class HiveQuery:
             conn = self._get_connection()
             cursor = conn.cursor()
             try:
-                # 切换数据库
-                cursor.execute(f"USE {database}")
-
                 # 查看表结构
-                cursor.execute(f"DESCRIBE {table}")
+                cursor.execute(f"DESCRIBE {database}.{table}")
                 results = cursor.fetchall()
 
                 if not results:
