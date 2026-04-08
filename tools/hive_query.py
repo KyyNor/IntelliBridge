@@ -222,7 +222,7 @@ class HiveQuery:
                 # 获取结果
                 results = cursor.fetchall()
                 if not results:
-                    return "查询结果为空"
+                    return "查询结果为空,请检查筛选条件后重试(数据日期格式为yyyy-MM-dd)"
 
                 # 获取列名
                 columns = [desc[0] for desc in cursor.description]
