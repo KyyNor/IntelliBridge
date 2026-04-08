@@ -2,6 +2,7 @@ from pyhive import hive
 import pymysql
 import re
 import hashlib
+import traceback
 import sqlglot
 import json
 import yaml
@@ -165,7 +166,7 @@ class HiveQuery:
 
         except Exception as e:
             error_msg = f"查询表结构失败: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
             # 也返回可用数据库列表
             available_dbs = self.list_databases()
             return f"{error_msg}\n\n可用数据库:\n{available_dbs}"
@@ -251,7 +252,7 @@ class HiveQuery:
 
         except Exception as e:
             error_msg = f"查询失败: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
             return error_msg
 
     def _check_sql_filter(self, sql: str) -> str:
@@ -335,7 +336,7 @@ class HiveQuery:
                 return "\n".join(output)
         except Exception as e:
             error_msg = f"列出数据库失败: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
             return error_msg
 
     def list_tables(self, database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> str:
@@ -406,7 +407,7 @@ class HiveQuery:
                 return json.dumps(result, ensure_ascii=False, indent=2)
         except Exception as e:
             error_msg = f"列出表失败: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
             return error_msg
 
     def close(self):
