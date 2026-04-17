@@ -3,9 +3,41 @@
 import json
 
 import requests
+import yaml
+from pathlib import Path
+
+from utils.logger import logger
+from utils.decorators import log_function_info
+from fastmcp import FastMCP
+
+# ── 从配置文件加载 ────────────────────────────────────────────────
+
+_config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+_ds_cfg: dict = {}
+
+if _config_path.exists():
+    try:
+        with open(_config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+            _ds_cfg = cfg.get("dolphin_scheduler", {}) or {}
+    except Exception as e:
+        logger.warning(f"DolphinScheduler 配置加载失败: {e}")
+
+BASE_URL: str = _ds_cfg.get("base_url", "")
+TOKEN: str = _ds_cfg.get("token", "")
 
 # 项目白名单，为空则不限制。只有此处列出的项目及其工作流/实例可被操作。
-ALLOWED_PROJECTS: list[str] = []
+ALLOWED_PROJECTS: list[str] = _ds_cfg.get("allowed_projects", []) or []
+
+if not BASE_URL or not TOKEN:
+    logger.warning(
+        "DolphinScheduler 未完成配置，请在 config/config.yaml 中填写 "
+        "dolphin_scheduler.base_url 与 dolphin_scheduler.token"
+    )
+
+# ── MCP 实例 ────────────────────────────────────────────────────
+
+ds_mcp = FastMCP("IntelliBridge DolphinScheduler")
 
 # API 路径
 PATH_PROJECTS = "/projects/list"
@@ -21,8 +53,10 @@ PATH_INSTANCE_TASKS = "/projects/{project_code}/process-instances/{instance_id}/
 PATH_LOG_DETAIL = "/log/detail"
 
 
+# ── 主类 ────────────────────────────────────────────────────────
+
 class DSClient:
-    def __init__(self, base_url: str, token: str):
+    def __init__(self, base_url: str = BASE_URL, token: str = TOKEN):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self._session = requests.Session()
@@ -134,7 +168,6 @@ class DSClient:
             if page >= data.get("totalPage", 1):
                 break
             page += 1
-        # DS state filter is not strict, do client-side filtering
         if state:
             results = [r for r in results if r.get("state") == state]
         return results
@@ -251,3 +284,252 @@ class DSClient:
                 "log": log_text,
             })
         return results
+
+
+# ── 默认单例 ────────────────────────────────────────────────────
+
+_ds_client = DSClient()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# MCP 工具层（透明转发到默认单例）
+# ══════════════════════════════════════════════════════════════════════
+
+# ── 项目 & 工作流查询 ──────────────────────────────────────────
+
+@ds_mcp.tool(name="get_projects")
+@log_function_info
+def mcp_get_projects() -> str:
+    """
+    获取 DolphinScheduler 项目清单。
+
+    Returns:
+        JSON 格式的项目列表，每项含 name/code/description 等字段
+    """
+    try:
+        projects = _ds_client.get_projects()
+        return json.dumps(projects, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"get_projects 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@ds_mcp.tool(name="get_workflows")
+@log_function_info
+def mcp_get_workflows(project_name: str, search: str = "", page: int = 1) -> str:
+    """
+    获取工作流清单。
+
+    Args:
+        project_name: 项目名称（必填）
+        search: 工作流名称模糊搜索关键字（可选）
+        page: 页码，从1开始（可选，默认1）
+
+    Returns:
+        JSON 格式，含 totalList（工作流列表）、totalPage、totalCount
+    """
+    try:
+        result = _ds_client.get_workflows(project_name, search, page)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"get_workflows 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@ds_mcp.tool(name="get_instances")
+@log_function_info
+def mcp_get_instances(project_name: str, search: str = "",
+                       state: str = "") -> str:
+    """
+    获取工作流实例清单。
+
+    Args:
+        project_name: 项目名称（必填）
+        search: 实例名称模糊搜索关键字（可选）
+        state: 状态过滤，可选值 SUBMITTED_SUCCESS / RUNNING_EXECUTION /
+               PAUSE / SUCCESS / FAILURE / KILL 等（可选，空则不过滤）
+
+    Returns:
+        JSON 格式的实例列表（分页自动聚合，最多100页×100条）
+    """
+    try:
+        instances = _ds_client.get_instances(project_name, search, state)
+        brief = [
+            {"id": i.get("id"), "name": i.get("name"),
+             "state": i.get("state"), "host": i.get("host"),
+             "startTime": i.get("startTime"), "endTime": i.get("endTime")}
+            for i in instances
+        ]
+        return json.dumps(brief, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"get_instances 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+# ── 工作流上下线 ────────────────────────────────────────────────
+
+@ds_mcp.tool(name="workflow_online")
+@log_function_info
+def mcp_workflow_online(project_name: str, workflow_name: str) -> str:
+    """
+    上线工作流（发布）。
+
+    Args:
+        project_name: 项目名称（必填）
+        workflow_name: 工作流名称（必填）
+
+    Returns:
+        DS API 原生响应，success=true 表示成功
+    """
+    try:
+        resp = _ds_client.workflow_online(project_name, workflow_name)
+        return json.dumps(resp, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"workflow_online 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@ds_mcp.tool(name="workflow_offline")
+@log_function_info
+def mcp_workflow_offline(project_name: str, workflow_name: str) -> str:
+    """
+    下线工作流。
+
+    Args:
+        project_name: 项目名称（必填）
+        workflow_name: 工作流名称（必填）
+
+    Returns:
+        DS API 原生响应，success=true 表示成功
+    """
+    try:
+        resp = _ds_client.workflow_offline(project_name, workflow_name)
+        return json.dumps(resp, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"workflow_offline 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+# ── 定时调度 ────────────────────────────────────────────────────
+
+@ds_mcp.tool(name="schedule_online")
+@log_function_info
+def mcp_schedule_online(project_name: str, workflow_name: str) -> str:
+    """
+    将工作流的定时调度上线（定时任务开始生效）。
+    注意：工作流本身须先调用 workflow_online，才能进行定时上线。
+
+    Args:
+        project_name: 项目名称（必填）
+        workflow_name: 工作流名称（必填）
+
+    Returns:
+        DS API 原生响应，success=true 表示成功
+    """
+    try:
+        resp = _ds_client.schedule_online(project_name, workflow_name)
+        return json.dumps(resp, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"schedule_online 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@ds_mcp.tool(name="schedule_offline")
+@log_function_info
+def mcp_schedule_offline(project_name: str, workflow_name: str) -> str:
+    """
+    将工作流的定时调度下线（暂停定时任务）。
+
+    Args:
+        project_name: 项目名称（必填）
+        workflow_name: 工作流名称（必填）
+
+    Returns:
+        DS API 原生响应，success=true 表示成功
+    """
+    try:
+        resp = _ds_client.schedule_offline(project_name, workflow_name)
+        return json.dumps(resp, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"schedule_offline 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+# ── 补数 ───────────────────────────────────────────────────────
+
+@ds_mcp.tool(name="complement_data")
+@log_function_info
+def mcp_complement_data(project_name: str, workflow_name: str,
+                          start_date: str, end_date: str,
+                          parallel: bool = False) -> str:
+    """
+    对工作流进行日期区间补数。
+
+    Args:
+        project_name: 项目名称（必填）
+        workflow_name: 工作流名称（必填）
+        start_date: 开始日期，格式 YYYY-MM-DD 或完整 datetime（必填）
+        end_date: 结束日期，同上格式（必填）
+        parallel: 是否并行执行（默认 False=串行）
+
+    Returns:
+        DS API 原生响应，包含提交的补数实例信息
+    """
+    try:
+        resp = _ds_client.complement_data(
+            project_name, workflow_name, start_date, end_date, parallel
+        )
+        return json.dumps(resp, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"complement_data 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+# ── 实例操作 ────────────────────────────────────────────────────
+
+@ds_mcp.tool(name="execute_instance")
+@log_function_info
+def mcp_execute_instance(project_name: str, instance_id: int,
+                           execute_type: str = "") -> str:
+    """
+    对工作流实例执行操作（重跑/停止/从失败处继续）。
+
+    Args:
+        project_name: 项目名称（必填）
+        instance_id: 实例ID（必填）
+        execute_type: 操作类型，支持三种：
+                     - REPEAT_RUNNING           重跑
+                     - STOP                     停止
+                     - START_FAILURE_TASK_PROCESS  从失败节点继续
+                     （若留空或非法值，返回支持的类型列表）
+
+    Returns:
+        DS API 原生响应；输入非法时返回 {error, supported_types} 提示
+    """
+    try:
+        resp = _ds_client.execute_instance(project_name, instance_id, execute_type)
+        return json.dumps(resp, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"execute_instance 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@ds_mcp.tool(name="get_instance_logs")
+@log_function_info
+def mcp_get_instance_logs(project_name: str, instance_id: int) -> str:
+    """
+    获取工作流实例下所有任务节点的运行日志。
+
+    Args:
+        project_name: 项目名称（必填）
+        instance_id: 实例ID（必填）
+
+    Returns:
+        JSON 数组，每项含 task_name（任务名）/state（状态）/log（日志正文）
+    """
+    try:
+        logs = _ds_client.get_instance_logs(project_name, instance_id)
+        return json.dumps(logs, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"get_instance_logs 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)

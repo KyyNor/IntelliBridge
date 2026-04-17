@@ -91,3 +91,15 @@ memory:
     username: "neo4j"
     password: "mem0graph"
 
+# DolphinScheduler 配置
+dolphin_scheduler:
+  # DS 服务地址
+  base_url: "http://localhost:5678"
+  # 访问令牌（登录后从 DS 管理界面获取）
+  token: "your-token-here"
+  # 允许操作的项目清单（留空表示不限制，非管理员务必按需填写）
+  allowed_projects: []
+  # allowed_projects 示例（有权限控制需求时请取消注释并填写真实项目名）：
+  # allowed_projects:
+  #   - 数据工厂
+
