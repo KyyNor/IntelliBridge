@@ -465,8 +465,7 @@ def mcp_schedule_offline(project_name: str, workflow_name: str) -> str:
 @ds_mcp.tool(name="complement_data")
 @log_function_info
 def mcp_complement_data(project_name: str, workflow_name: str,
-                          start_date: str, end_date: str,
-                          parallel: bool = False) -> str:
+                          start_date: str, end_date: str) -> str:
     """
     对工作流进行日期区间补数。
 
@@ -475,14 +474,13 @@ def mcp_complement_data(project_name: str, workflow_name: str,
         workflow_name: 工作流名称（必填）
         start_date: 开始日期，格式 YYYY-MM-DD 或完整 datetime（必填）
         end_date: 结束日期，同上格式（必填）
-        parallel: 是否并行执行（默认 False=串行）
 
     Returns:
         DS API 原生响应，包含提交的补数实例信息
     """
     try:
         resp = _ds_client.complement_data(
-            project_name, workflow_name, start_date, end_date, parallel
+            project_name, workflow_name, start_date, end_date
         )
         return json.dumps(resp, ensure_ascii=False, indent=2)
     except Exception as e:
