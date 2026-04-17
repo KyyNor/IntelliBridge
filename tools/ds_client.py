@@ -58,6 +58,8 @@ class DSClient:
     def _request(self, method: str, path: str, data: dict | None = None,
                  params: dict | None = None) -> dict:
         url = f"{self.base_url}{path}"
+        headers = dict(self._session.headers)
+        logger.info(f"[DS 请求] method={method} | url={url} | headers={headers} | data={data} | params={params}")
         try:
             resp = self._session.request(method, url, data=data, params=params,
                                          timeout=30)
