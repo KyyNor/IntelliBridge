@@ -76,7 +76,7 @@ class DSClient:
     def _ensure_project_cache(self) -> list[dict]:
         """加载项目缓存，返回项目列表。已缓存则直接返回缓存数据。"""
         if not self._project_cache:
-            PAGE_SIZE = 100
+            PAGE_SIZE = 50
             projects = []
             page_no = 1
             while True:
@@ -93,7 +93,6 @@ class DSClient:
                 projects = [p for p in projects if p["name"] in ALLOWED_PROJECTS]
             for p in projects:
                 self._project_cache[p["name"]] = p["code"]
-            return projects
         return [{"name": n, "code": c} for n, c in self._project_cache.items()]
 
     def _get_project_code(self, name: str) -> int:
