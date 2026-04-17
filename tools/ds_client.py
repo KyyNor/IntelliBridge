@@ -3,25 +3,15 @@
 import json
 
 import requests
-import yaml
-from pathlib import Path
 
 from utils.logger import logger
 from utils.decorators import log_function_info
+from utils.config import config
 from fastmcp import FastMCP
 
 # ── 从配置文件加载 ────────────────────────────────────────────────
 
-_config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-_ds_cfg: dict = {}
-
-if _config_path.exists():
-    try:
-        with open(_config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-            _ds_cfg = cfg.get("dolphin_scheduler", {}) or {}
-    except Exception as e:
-        logger.warning(f"DolphinScheduler 配置加载失败: {e}")
+_ds_cfg: dict = config.get("dolphin_scheduler", {}) or {}
 
 BASE_URL: str = _ds_cfg.get("base_url", "")
 TOKEN: str = _ds_cfg.get("token", "")

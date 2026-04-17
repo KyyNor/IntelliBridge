@@ -9,6 +9,7 @@ from tools.agent_browser import agent_browser_mcp,router as agent_browser_router
 from tools.mysql_query import mysql_mcp,router as mysql_router
 from tools.memory import Memory, memory_mcp
 from tools.ds_code_search import ds_search_mcp, DataFactoryCodeSearch
+from tools.ds_client import ds_mcp
 from utils.logger import logger
 
 memory_mcp_app = memory_mcp.http_app(path='/mcp/memory')
@@ -16,6 +17,7 @@ hive_mcp_app = hive_mcp.http_app(path='/mcp/hive')
 mysql_mcp_app = mysql_mcp.http_app(path='/mcp/mysql')
 ds_search_mcp_app = ds_search_mcp.http_app(path='/mcp/ds_search')
 agent_browser_mcp_app = agent_browser_mcp.http_app(path='/mcp/agent_browser')
+ds_mcp_app = ds_mcp.http_app(path='/mcp/ds_runner')
 
 app = FastAPI(
     title="IntelliBridge API",
@@ -58,6 +60,7 @@ combined_app = FastAPI(
         *mysql_mcp_app.routes,
         *ds_search_mcp_app.routes,
         *agent_browser_mcp_app.routes,
+        *ds_mcp_app.routes,
     ],
     lifespan=combine_lifespans(
         memory_mcp_app.lifespan,
@@ -65,6 +68,7 @@ combined_app = FastAPI(
         mysql_mcp_app.lifespan,
         ds_search_mcp_app.lifespan,
         agent_browser_mcp_app.lifespan,
+        ds_mcp_app.lifespan,
     ),
 )
 
