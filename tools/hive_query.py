@@ -115,6 +115,7 @@ class HiveQuery:
         """
         return hashlib.md5(sql.encode('utf-8')).hexdigest()
 
+    @cache.cache_it(expire=1800)
     def describe_table(self, table_full_name: str) -> str:
         """
         查看表结构
@@ -339,6 +340,34 @@ class HiveQuery:
             logger.error(f"{error_msg}\n{traceback.format_exc()}")
             return error_msg
 
+    def _refresh_database_table_cache(self, database: str) -> List[dict]:
+        """
+        从元数据库拉取指定库的所有表名清单，写入本地缓存，过期时间1小时
+
+        Args:
+            database: 数据库名
+
+        Returns:
+            所有表的字典列表，每个元素形如 {"TBL_NAME": "...", "table_comment": "..."}
+        """
+        try:
+            with self._get_meta_connection() as conn:
+                cursor = conn.cursor(pymysql.cursors.DictCursor)
+                sql = """
+                SELECT t.TBL_NAME, COALESCE(tp.PARAM_VALUE, '') AS table_comment
+                FROM TBLS t
+                LEFT JOIN TABLE_PARAMS tp ON t.TBL_ID = tp.TBL_ID AND tp.PARAM_KEY = 'comment'
+                WHERE t.DB_ID = (SELECT DB_ID FROM DBS WHERE NAME = %s)
+                ORDER BY t.TBL_NAME
+                """
+                cursor.execute(sql, (database,))
+                tables = cursor.fetchall()
+                logger.info(f"刷新表清单缓存成功: {database}, 共 {len(tables)} 张表")
+                return tables
+        except Exception as e:
+            logger.error(f"刷新表清单缓存失败: {database}, {e}\n{traceback.format_exc()}")
+            return []
+
     def list_tables(self, database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> str:
         """
         列出指定数据库的表
@@ -354,57 +383,43 @@ class HiveQuery:
         """
         # 限制 page_size 最大为 50
         page_size = min(page_size, 50)
-        offset = (page - 1) * page_size
 
         try:
-            with self._get_meta_connection() as conn:
-                cursor = conn.cursor(pymysql.cursors.DictCursor)
-                # 先获取总数
-                count_sql = """
-                SELECT COUNT(*) as cnt
-                FROM TBLS t
-                LEFT JOIN TABLE_PARAMS tp ON t.TBL_ID = tp.TBL_ID AND tp.PARAM_KEY = 'comment'
-                WHERE t.DB_ID = (SELECT DB_ID FROM DBS WHERE NAME = %s)
-                """
-                if table_name:
-                    count_sql += " AND (LOWER(t.TBL_NAME) LIKE CONCAT('%%', LOWER(%s), '%%') OR LOWER(COALESCE(tp.PARAM_VALUE, '')) LIKE CONCAT('%%', LOWER(%s), '%%'))"
-                    cursor.execute(count_sql, (database, table_name, table_name))
-                else:
-                    cursor.execute(count_sql, (database,))
+            # 尝试从缓存读取，无缓存或过期则重新拉取
+            cache_key = f"_db_tables:{database}"
+            tables = cache.get(cache_key)
+            if tables is None:
+                tables = self._refresh_database_table_cache(database)
+                cache.set(cache_key, tables, expire=3600)  # 1小时过期
 
-                total = cursor.fetchone()['cnt']
+            # 按 table_name 做模糊过滤（Python层，大小写不敏感）
+            if table_name:
+                kw = table_name.lower()
+                tables = [
+                    t for t in tables
+                    if kw in t["TBL_NAME"].lower() or kw in (t["table_comment"] or "").lower()
+                ]
 
-                # 再获取分页数据
-                data_sql = """
-                SELECT t.TBL_NAME, COALESCE(tp.PARAM_VALUE, '') as table_comment
-                FROM TBLS t
-                LEFT JOIN TABLE_PARAMS tp ON t.TBL_ID = tp.TBL_ID AND tp.PARAM_KEY = 'comment'
-                WHERE t.DB_ID = (SELECT DB_ID FROM DBS WHERE NAME = %s)
-                """
-                if table_name:
-                    data_sql += " AND (LOWER(t.TBL_NAME) LIKE CONCAT('%%', LOWER(%s), '%%') OR LOWER(COALESCE(tp.PARAM_VALUE, '')) LIKE CONCAT('%%', LOWER(%s), '%%'))"
-                    data_sql += " ORDER BY t.TBL_NAME LIMIT %s OFFSET %s"
-                    cursor.execute(data_sql, (database, table_name, table_name, page_size, offset))
-                else:
-                    data_sql += " ORDER BY t.TBL_NAME LIMIT %s OFFSET %s"
-                    cursor.execute(data_sql, (database, page_size, offset))
+            total = len(tables)
 
-                tables = cursor.fetchall()
+            # 分页切片
+            offset = (page - 1) * page_size
+            page_items = tables[offset:offset + page_size]
 
-                # 构建返回结果
-                result = {
-                    "database": database,
-                    "page": page,
-                    "page_size": page_size,
-                    "total": total,
-                    "tables": [
-                        {"table_name": t["TBL_NAME"], "table_comment": t["table_comment"]}
-                        for t in tables
-                    ]
-                }
+            # 构建返回结果
+            result = {
+                "database": database,
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "tables": [
+                    {"table_name": t["TBL_NAME"], "table_comment": t["table_comment"]}
+                    for t in page_items
+                ]
+            }
 
-                logger.info(f"列出表成功: {database}, 共 {total} 个表")
-                return json.dumps(result, ensure_ascii=False, indent=2)
+            logger.info(f"列出表成功: {database}, 共 {total} 张表（缓存命中）")
+            return json.dumps(result, ensure_ascii=False, indent=2)
         except Exception as e:
             error_msg = f"列出表失败: {str(e)}"
             logger.error(f"{error_msg}\n{traceback.format_exc()}")
