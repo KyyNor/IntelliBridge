@@ -76,8 +76,19 @@ class DSClient:
     def _ensure_project_cache(self) -> list[dict]:
         """加载项目缓存，返回项目列表。已缓存则直接返回缓存数据。"""
         if not self._project_cache:
-            resp = self._request("GET", PATH_PROJECTS)
-            projects = resp.get("data", [])
+            PAGE_SIZE = 100
+            projects = []
+            page_no = 1
+            while True:
+                resp = self._request("GET", PATH_PROJECTS,
+                                     params={"pageSize": PAGE_SIZE, "pageNo": page_no})
+                data = resp.get("data", {})
+                items = data.get("totalList", [])
+                projects.extend(items)
+                total_page = data.get("totalPage", 1)
+                if page_no >= total_page:
+                    break
+                page_no += 1
             if ALLOWED_PROJECTS:
                 projects = [p for p in projects if p["name"] in ALLOWED_PROJECTS]
             for p in projects:
