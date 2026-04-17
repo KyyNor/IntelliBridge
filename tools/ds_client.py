@@ -137,11 +137,14 @@ class DSClient:
         params: dict = {"pageSize": 15, "pageNo": page}
         if search:
             params["searchVal"] = search
+        KEYS = ["name", "version", "releaseState", "scheduleReleaseState",
+                "createTime", "updateTime", "modifyBy"]
         resp = self._request("GET", PATH_WORKFLOWS.format(project_code=code),
                              params=params)
         data = resp.get("data", {})
+        workflows = [{k: wf.get(k) for k in KEYS} for wf in data.get("totalList", [])]
         return {
-            "totalList": data.get("totalList", []),
+            "totalList": workflows,
             "totalPage": data.get("totalPage", 0),
             "totalCount": data.get("total", 0),
         }
