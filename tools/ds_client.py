@@ -1,6 +1,8 @@
 """DolphinScheduler 3.1.3 Python Client"""
 
 import json
+import re
+import time
 
 import requests
 
@@ -52,6 +54,8 @@ class DSClient:
         self._session = requests.Session()
         self._session.headers.update({"token": token})
         self._project_cache: dict[str, int] = {}  # name -> code
+        self._log_buffer: dict[str, list[str]] = {}   # (project, instance_id, task_name) -> [lines]
+        self._log_meta: dict[str, dict] = {}           # same key -> {total_lines, loaded_at}
 
     # ── internal helpers ──────────────────────────────────────────
 
@@ -177,6 +181,40 @@ class DSClient:
             results = [r for r in results if r.get("state") == state]
         return results
 
+    def list_instance_tasks(self, project_name: str, instance_id: int) -> list[dict]:
+        """获取实例下的任务列表，快速视图，仅返回关键字段及 focus_level。"""
+        pc = self._get_project_code(project_name)
+        resp = self._request("GET",
+                             PATH_INSTANCE_TASKS.format(project_code=pc, instance_id=instance_id))
+        task_list = resp.get("data", {}).get("taskList", [])
+        if not task_list:
+            return []
+
+        FOCUS_FAIL = {"FAILURE", "KILL"}
+        FOCUS_OK   = {"SUCCESS"}
+
+        def focus_of(state: str) -> str:
+            s = str(state).upper().replace("-", "_")
+            if s in FOCUS_FAIL:
+                return "FAILURE"
+            if s in FOCUS_OK:
+                return "SUCCESS"
+            return "OTHER"
+
+        return [
+            {
+                "task_code": t.get("id"),
+                "task_name": t.get("name", "unknown"),
+                "task_type": t.get("type", ""),
+                "state":     t.get("state", "UNKNOWN"),
+                "start_time": t.get("startTime"),
+                "end_time":  t.get("endTime"),
+                "host":      t.get("host", ""),
+                "focus_level": focus_of(t.get("state", "")),
+            }
+            for t in task_list
+        ]
+
     # ── workflow operations ───────────────────────────────────────
 
     def workflow_online(self, project_name: str, workflow_name: str) -> dict:
@@ -256,39 +294,135 @@ class DSClient:
                              data={"processInstanceId": str(instance_id),
                                    "executeType": execute_type})
 
-    def get_instance_logs(self, project_name: str, instance_id: int) -> list[dict]:
-        """获取实例下所有任务的日志。返回 [{task_name, state, log}, ...]"""
+    def load_task_full_log(self, project_name: str, instance_id: int,
+                        task_name: str) -> dict:
+        """预加载单个任务的全量日志（每页1000行，循环直到读完），存入内存缓冲区。
+
+        Returns:
+            {"task_name": ..., "total_lines": N, "loaded_at": timestamp, "task_id": ...}
+        Raises:
+            ValueError: 未找到指定的 task
+        """
         pc = self._get_project_code(project_name)
+
+        # 找到 task_id
         resp = self._request("GET",
                              PATH_INSTANCE_TASKS.format(project_code=pc, instance_id=instance_id))
         task_list = resp.get("data", {}).get("taskList", [])
-        if not task_list:
-            return []
-        results = []
-        for task in task_list:
-            task_id = task.get("id")
-            task_name = task.get("name", "unknown")
-            state = task.get("state", "UNKNOWN")
-            log_text = ""
-            if task_id:
-                try:
-                    log_resp = self._request(
-                        "GET", PATH_LOG_DETAIL,
-                        params={"taskInstanceId": task_id,
-                                "skipLineNum": 0, "limit": 10000})
-                    log_data = log_resp.get("data", {})
-                    if isinstance(log_data, dict):
-                        log_text = log_data.get("message", "")
-                    else:
-                        log_text = str(log_data)
-                except (RuntimeError, IOError, json.JSONDecodeError) as e:
-                    log_text = f"获取日志失败: {e}"
-            results.append({
-                "task_name": task_name,
-                "state": state,
-                "log": log_text,
-            })
-        return results
+        matched = None
+        for t in task_list:
+            if t.get("name") == task_name:
+                matched = t
+                break
+        if not matched:
+            raise ValueError(f"实例 {instance_id} 中未找到任务: {task_name}")
+
+        task_id = matched.get("id")
+        key = (project_name, instance_id, task_name)
+        if key in self._log_buffer and self._log_meta.get(key, {}).get("task_id") == task_id:
+            logger.info(f"[DS 日志] {task_name} 已在 buffer 中，跳过加载")
+            return self._log_meta[key]
+
+        # 分页拉取
+        CHUNK = 1000
+        offset = 0
+        buffer: list[str] = []
+        while True:
+            resp = self._request("GET", PATH_LOG_DETAIL,
+                                 params={"taskInstanceId": task_id,
+                                         "skipLineNum": offset, "limit": CHUNK})
+            msg = resp.get("data", {})
+            msg = msg.get("message", "") if isinstance(msg, dict) else str(msg)
+            lines = msg.splitlines()
+            if not lines:
+                break
+            buffer.extend(lines)
+            if len(lines) < CHUNK:
+                break
+            offset += CHUNK
+
+        now = time.time()
+        self._log_buffer[key] = buffer
+        self._log_meta[key] = {
+            "task_name": task_name,
+            "task_id": task_id,
+            "total_lines": len(buffer),
+            "loaded_at": now,
+        }
+        logger.info(f"[DS 日志] {task_name} 加载完毕，总行数={len(buffer)}")
+        return self._log_meta[key]
+
+    def get_task_log(self, project_name: str, instance_id: int,
+                     task_name: str, *,
+                     mode: str = "simple",
+                     offset: int = 0,
+                     limit: int = 200) -> dict:
+        """基于缓冲区的日志展示。
+
+        mode="simple" （默认）：全文搜索错误行（error/exception/fail/traceback），
+            命中的行连带前后各10行上下文一起返回，适合快速定位问题。
+        mode="detail"：直接从 buffer 中间切片读取，支持 offset+limit 翻页，
+            用于查看原始日志正文。
+        """
+        key = (project_name, instance_id, task_name)
+        if key not in self._log_buffer:
+            raise RuntimeError(
+                f"日志未预加载，请先调用 load_task_full_log "
+                f"(project_name={project_name!r}, instance_id={instance_id}, task_name={task_name!r})"
+            )
+
+        lines = self._log_buffer[key]
+        total = len(lines)
+
+        if mode == "detail":
+            safe_end = min(offset + limit, total)
+            slice_lines = lines[offset:safe_end]
+            return {
+                "task_name":  task_name,
+                "total_lines": total,
+                "offset":     offset,
+                "limit":      limit,
+                "lines":      slice_lines,
+                "has_more":   safe_end < total,
+            }
+
+        # --- simple 模式 ---
+        # (?i)=忽略大小写，\b词边界
+        PATTERNS = [
+            re.compile(r"\berror\b", re.IGNORECASE),
+            re.compile(r"exception", re.IGNORECASE),
+            re.compile(r"\bfail(ed|ure)?\b", re.IGNORECASE),
+            re.compile(r"traceback", re.IGNORECASE),
+        ]
+        CTX = 10  # 前后各10行上下文
+        matches: list[dict] = []
+
+        for i, line in enumerate(lines):
+            if any(p.search(line) for p in PATTERNS):
+                ctx_start = max(0, i - CTX)
+                ctx_end   = min(total, i + CTX + 1)
+                matches.append({
+                    "line_no":  i,
+                    "context":  [
+                        f"[{j}] {lines[j]}" for j in range(ctx_start, ctx_end)
+                    ],
+                })
+
+        # 按行号去重，相邻命中（跨越少于CTX行）视为同一批次，只保留首个
+        # 这样即使有上百个错误，也不会返回数百个几乎一样的上下文块
+        collapsed: list[dict] = []
+        last_end = -1
+        for m in matches:
+            if m["line_no"] > last_end:
+                collapsed.append(m)
+                last_end = m["line_no"] + CTX * 2  # 本块的尾行，重叠检测门槛放宽到2倍ctx
+
+        return {
+            "task_name":      task_name,
+            "total_lines":    total,
+            "matched_count":  len(collapsed),
+            "matches":        collapsed,
+        }
 
 
 # ── 默认单例 ────────────────────────────────────────────────────
@@ -517,22 +651,80 @@ def mcp_execute_instance(project_name: str, instance_id: int,
         return json.dumps({"error": str(e)}, ensure_ascii=False)
 
 
-@ds_mcp.tool(name="get_instance_logs")
+@ds_mcp.tool(name="list_instance_tasks")
 @log_function_info
-def mcp_get_instance_logs(project_name: str, instance_id: int) -> str:
+def mcp_list_instance_tasks(project_name: str, instance_id: int) -> str:
     """
-    获取工作流实例下所有任务节点的运行日志。
+    查看实例下所有任务的状态概览（不含日志，快速定位失败任务）。
 
     Args:
         project_name: 项目名称（必填）
         instance_id: 实例ID（必填）
 
     Returns:
-        JSON 数组，每项含 task_name（任务名）/state（状态）/log（日志正文）
+        JSON 数组，每项含 task_name/task_type/state/start_time/end_time/host/focus_level
     """
     try:
-        logs = _ds_client.get_instance_logs(project_name, instance_id)
-        return json.dumps(logs, ensure_ascii=False, indent=2)
+        tasks = _ds_client.list_instance_tasks(project_name, instance_id)
+        return json.dumps(tasks, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.error(f"get_instance_logs 失败: {e}")
+        logger.error(f"list_instance_tasks 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@ds_mcp.tool(name="load_task_full_log")
+@log_function_info
+def mcp_load_task_full_log(project_name: str, instance_id: int,
+                            task_name: str) -> str:
+    """
+    预加载单个任务的所有日志（每页1000行自动循环读完），此后可直接调
+    get_task_log 进行 simple/detail 查看，多次调用不会重复拉取。
+
+    Args:
+        project_name: 项目名称（必填）
+        instance_id: 实例ID（必填）
+        task_name: 具体任务名称（必填，可从 list_instance_tasks 结果取得）（必填）
+
+    Returns:
+        JSON，含 task_name/total_lines/loaded_at
+    """
+    try:
+        meta = _ds_client.load_task_full_log(project_name, instance_id, task_name)
+        return json.dumps(meta, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"load_task_full_log 失败: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@ds_mcp.tool(name="get_task_log")
+@log_function_info
+def mcp_get_task_log(project_name: str, instance_id: int,
+                     task_name: str,
+                     mode: str = "simple",
+                     offset: int = 0,
+                     limit: int = 200) -> str:
+    """
+    查看任务日志。须先调用 load_task_full_log 完成预加载。
+
+    Args:
+        project_name: 项目名称（必填）
+        instance_id: 实例ID（必填）
+        task_name: 任务名称（必填）
+        mode: 查看模式。可选 "simple"（默认，只返回错误行及±10行上下文）
+                   或 "detail"（返回原始日志片段，支持 offset+limit 分页）
+        offset: 起始行号，mode=detail 时生效，默认0
+        limit: 最大返回行数，mode=detail 时生效，默认200
+
+    Returns:
+        JSON 对象。simple 模式下含 matched_count + matches（行号+上下文）；
+        detail 模式下含 lines + has_more
+    """
+    try:
+        result = _ds_client.get_task_log(
+            project_name, instance_id, task_name,
+            mode=mode, offset=offset, limit=limit
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"get_task_log 失败: {e}")
         return json.dumps({"error": str(e)}, ensure_ascii=False)
