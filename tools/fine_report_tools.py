@@ -524,7 +524,7 @@ class FineReportTools:
         controls: List[Dict[str, Any]],
         locators: Optional[Dict[str, Any]] = None,
         target_date: str = "",
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         设控件值（含日期控件自动填充）→ 提交 → 下载Excel → 按 locators 提取数据。
 
@@ -597,7 +597,7 @@ class FineReportTools:
             # 提取数据
             if locators:
                 data = extract_data_from_excel(str(tmp_file), locators)
-                return json.dumps({"success": True, "data": data}, ensure_ascii=False, indent=2)
+                return {"success": True, "data": data}
             else:
                 # fallback：无 locators 时返回整张 Excel 的内容
                 import pandas as pd
@@ -607,16 +607,16 @@ class FineReportTools:
                     "rows": df.values.tolist(),
                     "shape": [df.shape[0], df.shape[1]],
                 }
-                return json.dumps({
+                return {
                     "success": True,
                     "data": excel_json,
                     "message": "未提供 locators，已返回整表内容",
                     "download_path": str(tmp_file),
-                }, ensure_ascii=False, indent=2)
+                }
 
         except Exception as e:
             logger.exception(f"download_fine_by_filter 失败: {e}")
-            return json.dumps({"success": False, "data": {}, "error": str(e)}, ensure_ascii=False)
+            return {"success": False, "data": {}, "error": str(e)}
 
         finally:
             if page:
@@ -660,7 +660,7 @@ def _fr_download_fine_by_filter(
     controls: List[Dict[str, Any]] = None,
     locators: Optional[Dict[str, Any]] = None,
     target_date: str = "",
-) -> str:
+) -> Dict[str, Any]:
     if controls is None:
         controls = []
     report_url = _build_report_url(report_path)
@@ -678,7 +678,7 @@ def _fr_download_fine_by_filter(
     ).result()
     # 仅成功时缓存；失败时不写入缓存
     try:
-        if json.loads(result).get("success"):
+        if result.get("success"):
             cache_manager.set(cache_key, result, expire=86400)
         else:
             logger.warning(f"[缓存跳过] download_fine_by_filter {report_path} 请求失败，不予缓存")
@@ -715,7 +715,7 @@ def fr_download_fine_by_filter(
     report_path: str,
     controls: List[Dict[str, Any]] = None,
     target_date: str = "",
-) -> str:
+) -> Dict[str, Any]:
     """
     设控件值、从 FineReport 下载 Excel、并按提取规则返回结构化数据。
 

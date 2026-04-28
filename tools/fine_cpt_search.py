@@ -97,11 +97,7 @@ class FineCptObject:
             return [
                 {
                     "full_table_name": i.full_table_name,
-                    "db_name": i.db_name,
-                    "table_name": i.table_name,
                     "db_type": i.db_type,
-                    "host": i.host,
-                    "port": i.port,
                     "link": i.link,
                 }
                 for i in infos
@@ -109,12 +105,8 @@ class FineCptObject:
             ]
 
         return {
-            "pk": self.pk,
             "display_name": self.display_name,
             "full_template_path": self.full_template_path,
-            "mount_type": self.mount_type,
-            "cpt_file_path": self.cpt_file_path,
-            "base_sub_dir": self.base_sub_dir,
             "source_tables": infos_to_list(self.source_tables),
             "target_tables": infos_to_list(self.target_tables),
             "jump_links": infos_to_list(self.jump_links),
