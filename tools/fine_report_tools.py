@@ -91,7 +91,6 @@ def _login_once(page: Page) -> None:
         iframe_el.locator('text="点我前往新环境"').click()
         logger.info("[FR 登录] 「新环境」入口点击完成")
     except Exception:
-    except Exception:
         pass
 
     time.sleep(2)
