@@ -88,3 +88,4 @@ zstandard==0.25.0
 playwright # datafactory_scripts 使用
 paramiko # datafactory_scripts 使用
 pandas
+openpyxl
