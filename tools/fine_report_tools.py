@@ -21,6 +21,8 @@ from utils.logger import logger
 from utils.decorators import log_function_info
 from utils.cache import cache as cache_manager
 
+import anyio
+
 from fastmcp import FastMCP
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -638,7 +640,9 @@ def _fr_get_report_sample(report_path: str) -> str:
     if cached is not None:
         logger.info(f"[缓存命中] report_sample {report_path}")
         return cached
-    result = FineReportTools().get_report_sample(report_url)
+    result = anyio.to_thread.run_sync(
+        lambda: FineReportTools().get_report_sample(report_url)
+    )
     # 仅成功时缓存；失败（如登录失败、页面报错）不写入缓存，避免错误结果被长期复用
     if not result.startswith("# 错误"):
         cache_manager.set(cache_key, result, expire=3 * 86400)
@@ -664,11 +668,13 @@ def _fr_download_fine_by_filter(
         logger.info(f"[缓存命中] download_fine_by_filter {report_url} controls={controls} target_date={target_date}")
         return cached
 
-    result = FineReportTools().download_fine_by_filter(
-        report_url=report_url,
-        controls=controls,
-        locators=locators,
-        target_date=target_date,
+    result = anyio.to_thread.run_sync(
+        lambda: FineReportTools().download_fine_by_filter(
+            report_url=report_url,
+            controls=controls,
+            locators=locators,
+            target_date=target_date,
+        )
     )
     # 仅成功时缓存；失败时不写入缓存
     try:
