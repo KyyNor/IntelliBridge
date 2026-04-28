@@ -52,50 +52,49 @@ def _get_browser_context() -> BrowserContext:
     return _global_context
 
 
-def _is_on_login_page(page: Page) -> bool:
-    """判断当前页面是否为登录页面"""
-    url = page.url
-    return "login" in url.lower()
+def _is_on_login_page(page_or_url) -> bool:
+    """判断当前页面或 URL 是否处于登录页（URL 必须以 /login 结尾，防止误判）"""
+    url = getattr(page_or_url, "url", page_or_url)
+    return url.rstrip("/").endswith("/login")
 
 
 def _login_once(page: Page) -> None:
-    """在给定 Page 上执行一次性登录（使用精确 CSS 选择器）"""
+    """检测到 /login 页面时，强制跳转 SSO 登录页、完成认证、切新环境（SSO 场景专用）"""
     username = config.get("fine_report.username")
     password = config.get("fine_report.password")
     login_url = config.get("fine_report.login_url")
 
-    if not username or not password:
-        raise RuntimeError("FineReport username 或 password 配置缺失")
+    if not username or not password or not login_url:
+        raise RuntimeError("FineReport login_url/username/password 配置缺失")
 
-    if _is_on_login_page(page):
-        logger.info("检测到登录页面，执行登录...")
-        page.fill("#inputUsername", username)
-        page.fill("#inputPassword", password)
-        page.click("#submitBtn")
-        page.wait_for_load_state("networkidle")
-        logger.info("登录表单已提交")
-    else:
-        logger.info(f"当前无需登录，页面 URL: {page.url}")
+    logger.info(f"检测到 /login 页面，主动跳转 SSO 登录页: {login_url}")
+    page.goto(login_url, wait_until="networkidle")
+    page.fill("#inputUsername", username)
+    page.fill("#inputPassword", password)
+    page.click("#submitBtn")
+    page.wait_for_load_state("networkidle")
+    logger.info("SSO 登录完成")
 
-    time.sleep(3)
+    time.sleep(2)
 
-    # 点击"点我前往新环境"（生产/测试环境切换提示，若有的话）
+    # 点"点我前往新环境"
     try:
         iframe_el = page.frame_locator('iframe')
         iframe_el.locator('text="点我前往新环境"').click()
-        logger.info("已进入新环境")
+        logger.info("已点击「新环境」入口")
     except Exception:
         pass
 
+    time.sleep(2)
+
 
 def _ensure_logged_in(page: Page) -> None:
-    """确保当前 Page 已登录，如在登录页则自动执行登录"""
+    """确保当前 Page 已登录；若已在登录页则触发 SSO 登录流程"""
     global _logged_in
-    if _is_on_login_page(page):
+    if _is_on_login_page(page.url):
+        logger.info("页面仍停留在登录页，触发 SSO 登录流程")
         _login_once(page)
-        _logged_in = True
-    else:
-        _logged_in = True
+    _logged_in = True
 
 
 # ---------------------------------------------------------------------------
