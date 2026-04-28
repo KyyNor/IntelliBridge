@@ -68,21 +68,27 @@ def _login_once(page: Page) -> None:
     if not username or not password or not login_url:
         raise RuntimeError("FineReport login_url/username/password 配置缺失")
 
-    logger.info(f"检测到 /login 页面，主动跳转 SSO 登录页: {login_url}")
+    logger.info("[FR 登录] 检测到 /login 页面，准备跳转到 SSO 登录页")
+    logger.info(f"[FR 登录] SSO 登录地址: {login_url}")
+    logger.info("[FR 登录] 正在填充用户名...")
     page.goto(login_url, wait_until="networkidle")
     page.fill("#inputUsername", username)
+    logger.info("[FR 登录] 用户名已填充，正在填充密码...")
     page.fill("#inputPassword", password)
+    logger.info("[FR 登录] 密码已填充，点击登录按钮...")
     page.click("#submitBtn")
     page.wait_for_load_state("networkidle")
-    logger.info("SSO 登录完成")
+    logger.info("[FR 登录] SSO 登录请求已发送，等待响应...")
 
     time.sleep(2)
 
     # 点"点我前往新环境"
     try:
+        logger.info("[FR 登录] 尝试查找并点击「点我前往新环境」入口...")
         iframe_el = page.frame_locator('iframe')
         iframe_el.locator('text="点我前往新环境"').click()
-        logger.info("已点击「新环境」入口")
+        logger.info("[FR 登录] 「新环境」入口点击完成")
+    except Exception:
     except Exception:
         pass
 
@@ -93,7 +99,7 @@ def _ensure_logged_in(page: Page) -> None:
     """确保当前 Page 已登录；若已在登录页则触发 SSO 登录流程"""
     global _logged_in
     if _is_on_login_page(page.url):
-        logger.info("页面仍停留在登录页，触发 SSO 登录流程")
+        logger.info(f"[FR 登录] 当前页面仍为登录页（URL={page.url}），触发 SSO 登录流程")
         _login_once(page)
     _logged_in = True
 
@@ -409,8 +415,9 @@ class FineReportTools:
             # 登录兜底（session 可能已失效）
             _ensure_logged_in(page)
             page.wait_for_load_state("networkidle")
-            
+
             page.goto(report_url, wait_until="networkidle")
+            logger.info(f"[FR sample] goto 完成，当前实际页面 URL: {page.url}")
             page.wait_for_load_state("networkidle")
 
             # 获取控件信息
@@ -542,6 +549,7 @@ class FineReportTools:
             page.wait_for_load_state("networkidle")
 
             page.goto(report_url, wait_until="networkidle")
+            logger.info(f"[FR download] goto 完成，当前实际页面 URL: {page.url}")
             page.wait_for_load_state("networkidle")
 
             # 自动填日期控件
@@ -624,13 +632,18 @@ def _build_report_url(report_path: str) -> str:
 
 def _fr_get_report_sample(report_path: str) -> str:
     report_url = _build_report_url(report_path)
+    logger.info(f"[FR] 拼接报表 URL: {report_url}")
     cache_key = f"fr_sample:{report_path}"
     cached = cache_manager.get(cache_key)
     if cached is not None:
         logger.info(f"[缓存命中] report_sample {report_path}")
         return cached
     result = FineReportTools().get_report_sample(report_url)
-    cache_manager.set(cache_key, result, expire=3 * 86400)
+    # 仅成功时缓存；失败（如登录失败、页面报错）不写入缓存，避免错误结果被长期复用
+    if not result.startswith("# 错误"):
+        cache_manager.set(cache_key, result, expire=3 * 86400)
+    else:
+        logger.warning(f"[缓存跳过] report_sample {report_path} 登录/下载失败，不予缓存")
     return result
 
 
@@ -643,6 +656,7 @@ def _fr_download_fine_by_filter(
     if controls is None:
         controls = []
     report_url = _build_report_url(report_path)
+    logger.info(f"[FR] 拼接报表 URL: {report_url}")
 
     cache_key = f"fr_download:{report_path}:{json.dumps(controls, sort_keys=True)}:{target_date}"
     cached = cache_manager.get(cache_key)
@@ -656,7 +670,14 @@ def _fr_download_fine_by_filter(
         locators=locators,
         target_date=target_date,
     )
-    cache_manager.set(cache_key, result, expire=86400)
+    # 仅成功时缓存；失败时不写入缓存
+    try:
+        if json.loads(result).get("success"):
+            cache_manager.set(cache_key, result, expire=86400)
+        else:
+            logger.warning(f"[缓存跳过] download_fine_by_filter {report_path} 请求失败，不予缓存")
+    except Exception:
+        logger.warning(f"[缓存跳过] download_fine_by_filter {report_path} 无法解析返回值，不予缓存")
     return result
 
 
