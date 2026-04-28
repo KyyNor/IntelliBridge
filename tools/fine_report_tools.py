@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 
-from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, Download
+from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
 from utils.config import config
 from utils.logger import logger
@@ -373,6 +373,10 @@ class FineReportTools:
             "fine_report.download_path",
             "./downloads/fr_download",
         )
+        self.browserless_download_path = config.get(
+            "fine_report.browserless_download_path",
+            "./downloads/browserless_download_path",
+        )
         self.download_timeout_ms = config.get("fine_report.download_timeout_ms", 60000)
 
     # ------------------------------------------------------------------
@@ -431,10 +435,14 @@ class FineReportTools:
             with page.expect_download(timeout=self.download_timeout_ms) as dl_info:
                 page.evaluate("_g().exportReportToExcel('simple')")
 
-            dl: Download = dl_info.value
+            download_file_path = f'{self.browserless_download_path}/{dl_info.value.suggested_filename}'
+            _wait_for_file_stable(download_file_path)
+
             fname = f"fr_sample_{uuid.uuid4().hex[:8]}.xlsx"
             tmp_file = dl_dir / fname
-            dl.save_as(str(tmp_file))
+
+            logger.info(f"文件最终存储路径：{tmp_file}")
+            shutil.copy(download_file_path, tmp_file)
 
             # MarkItDown 解析
             try:
@@ -552,18 +560,14 @@ class FineReportTools:
             with page.expect_download(timeout=self.download_timeout_ms) as dl_info:
                 page.evaluate("_g().exportReportToExcel('simple')")
 
-            dl: Download = dl_info.value
-            fname = f"fr_{uuid.uuid4().hex[:8]}.xlsx"
+            download_file_path = f'{self.browserless_download_path}/{dl_info.value.suggested_filename}'
+            _wait_for_file_stable(download_file_path)
+
+            fname = f"fr_sample_{uuid.uuid4().hex[:8]}.xlsx"
             tmp_file = dl_dir / fname
-            dl.save_as(str(tmp_file))
 
-            # 确保大文件下载完成
-            try:
-                _wait_for_file_stable(str(tmp_file), stable_seconds=3, timeout=300)
-            except Exception as e:
-                logger.warning(f"文件稳定等待失败（将继续）: {e}")
-
-            logger.info(f"Excel 下载完成: {tmp_file}")
+            logger.info(f"文件最终存储路径：{tmp_file}")
+            shutil.copy(download_file_path, tmp_file)
 
             # 提取数据
             if locators:

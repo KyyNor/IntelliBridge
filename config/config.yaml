@@ -103,3 +103,16 @@ dolphin_scheduler:
     - 公共每日跑批-分钟级任务
     - 数据标准化
 
+fine_report:
+  download_path: '/home/bdspk/hxb_dh/cache/intellibridge'
+  browserless_download_path: '/home/bdspk/hxb_dh/cache/browserless_download'
+  download_timeout_ms: 60000
+  date_widget_names:
+    - date
+    - sjdate
+    - etl_date
+    - import_date_tag
+  username: 
+  password: 
+  login_url: 'http://125.1.129.76:8080/fr/'
+  cdp_url: 'http://125.1.129.153:10000'
