@@ -385,7 +385,7 @@ class FineReportTools:
 
     def get_report_sample(self, report_url: str) -> str:
         """
-        获取报表样例：访问报表 → 下载Excel → MarkItDown转Markdown → 返回控件信息+页面内容摘要。
+        获取报表样例：访问报表 → 下载Excel → openpyxl提取文本 → 返回控件信息+页面内容摘要。
 
         Args:
             report_url: FineReport 报表的完整 URL
@@ -444,15 +444,23 @@ class FineReportTools:
             logger.info(f"文件最终存储路径：{tmp_file}")
             shutil.copy(download_file_path, tmp_file)
 
-            # MarkItDown 解析
+            # openpyxl 解析
             try:
-                from markitdown import MarkItDown
-                converter = MarkItDown()
-                doc_result = converter.convert(str(tmp_file))
-                page_md = doc_result.text_content or ""
+                import openpyxl
+                wb = openpyxl.load_workbook(str(tmp_file), data_only=True)
+                parts = []
+                for ws in wb.worksheets:
+                    rows = ws.iter_rows(values_only=True)
+                    for row in rows:
+                        cell_vals = [
+                            str(c) for c in row if c is not None
+                        ]
+                        if cell_vals:
+                            parts.append(" | ".join(cell_vals))
+                page_md = "\n".join(parts)
             except Exception as e:
-                logger.warning(f"MarkItDown 解析失败: {e}")
-                page_md = "(MarkItDown 解析失败，内容不可读)"
+                logger.warning(f"openpyxl 解析失败: {e}")
+                page_md = "(表格内容不可读)"
 
             # 组装返回
             widgets_list = json.loads(widgets_info)
