@@ -7,9 +7,11 @@ import uvicorn
 from tools.hive_query import hive_mcp, router as hive_router
 from tools.agent_browser import agent_browser_mcp,router as agent_browser_router
 from tools.mysql_query import mysql_mcp,router as mysql_router
+from tools.fine_report_tools import fr_mcp, fr_router
 from tools.memory import Memory, memory_mcp
 from tools.ds_code_search import ds_search_mcp, DataFactoryCodeSearch
 from tools.ds_client import ds_mcp
+from tools.fine_cpt_search import fine_cpt_mcp
 from utils.logger import logger
 
 memory_mcp_app = memory_mcp.http_app(path='/mcp/memory')
@@ -18,6 +20,8 @@ mysql_mcp_app = mysql_mcp.http_app(path='/mcp/mysql')
 ds_search_mcp_app = ds_search_mcp.http_app(path='/mcp/ds_search')
 agent_browser_mcp_app = agent_browser_mcp.http_app(path='/mcp/agent_browser')
 ds_mcp_app = ds_mcp.http_app(path='/mcp/ds_runner')
+fr_mcp_app = fr_mcp.http_app(path='/mcp/fine_report_tools')
+fine_cpt_mcp_app = fine_cpt_mcp.http_app(path='/mcp/fine_search')
 
 app = FastAPI(
     title="IntelliBridge API",
@@ -60,6 +64,8 @@ combined_app = FastAPI(
         *mysql_mcp_app.routes,
         *ds_search_mcp_app.routes,
         *agent_browser_mcp_app.routes,
+        *fr_mcp_app.routes,
+        *fine_cpt_mcp_app.routes,
         *ds_mcp_app.routes,
     ],
     lifespan=combine_lifespans(
@@ -68,6 +74,8 @@ combined_app = FastAPI(
         mysql_mcp_app.lifespan,
         ds_search_mcp_app.lifespan,
         agent_browser_mcp_app.lifespan,
+        fr_mcp_app.lifespan,
+        fine_cpt_mcp_app.lifespan,
         ds_mcp_app.lifespan,
     ),
 )

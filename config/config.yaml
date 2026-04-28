@@ -94,12 +94,12 @@ memory:
 # DolphinScheduler 配置
 dolphin_scheduler:
   # DS 服务地址
-  base_url: "http://localhost:5678"
+  base_url: "http://125.1.129.80:12345/dolphinscheduler"
   # 访问令牌（登录后从 DS 管理界面获取）
-  token: "your-token-here"
+  token: "3ee6264f3c5e25af95fc1d482c33ce2c"
   # 允许操作的项目清单（留空表示不限制，非管理员务必按需填写）
-  allowed_projects: []
-  # allowed_projects 示例（有权限控制需求时请取消注释并填写真实项目名）：
-  # allowed_projects:
-  #   - 数据工厂
+  allowed_projects: 
+    - 测试
+    - 公共每日跑批-分钟级任务
+    - 数据标准化
 
