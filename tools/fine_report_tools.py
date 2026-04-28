@@ -56,9 +56,10 @@ def _get_browser_context() -> BrowserContext:
 
 
 def _is_on_login_page(page_or_url) -> bool:
-    """判断当前页面或 URL 是否处于登录页（URL 必须以 /login 结尾，防止误判）"""
+    """判断当前页面或 URL 是否处于登录页（去掉 ?origin=xxx 参数后再判断，防止误判）"""
     url = getattr(page_or_url, "url", page_or_url)
-    return url.rstrip("/").endswith("/login")
+    path = url.split("?")[0].rstrip("/")
+    return path.endswith("/login")
 
 
 def _login_once(page: Page) -> None:
@@ -160,14 +161,13 @@ def _wait_for_file_stable(
 # ---------------------------------------------------------------------------
 
 def _auto_fill_date_control(page: Page, target_date: str) -> None:
-    """
-    利用 JavaScript 自动识别报表中最可能的时间控件，并将 target_date 填入。
+    """利用 JavaScript 自动识别报表中最可能的时间控件，并将 target_date 填入。"""
 
-    识别策略：
-    - 枚举所有 datetime 类型控件
-    - 若某个控件的当前值落在最近5天内，认定为候选，再用 date_widget_names 决定优先级
-    - 若无匹配，则按遍历顺序取第一个
-    """
+    # 未登录状态下 _g 不存在，跳过以免报错，等登录后再处理
+    if _is_on_login_page(page.url):
+        logger.info("[FR] 当前仍在登录页，跳过日期控件填充，等待登录流程完成")
+        return
+
     if not target_date:
         logger.info("未指定 target_date，跳过日期控件填充")
         return
