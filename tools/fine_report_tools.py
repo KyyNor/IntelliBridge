@@ -404,6 +404,9 @@ class FineReportTools:
             # 登录兜底（session 可能已失效）
             _ensure_logged_in(page)
             page.wait_for_load_state("networkidle")
+            
+            page.goto(report_url, wait_until="networkidle")
+            page.wait_for_load_state("networkidle")
 
             # 获取控件信息
             widgets_info = page.evaluate("""
@@ -519,6 +522,9 @@ class FineReportTools:
             time.sleep(3)
 
             _ensure_logged_in(page)
+            page.wait_for_load_state("networkidle")
+
+            page.goto(report_url, wait_until="networkidle")
             page.wait_for_load_state("networkidle")
 
             # 自动填日期控件
