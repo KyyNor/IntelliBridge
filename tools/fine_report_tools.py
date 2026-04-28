@@ -18,6 +18,7 @@ from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, 
 from utils.config import config
 from utils.logger import logger
 from utils.decorators import log_function_info
+from utils.cache import cache as cache_manager
 
 from fastmcp import FastMCP
 from fastapi import APIRouter
@@ -590,7 +591,14 @@ class FineReportTools:
 # ---------------------------------------------------------------------------
 
 def _fr_get_report_sample(report_url: str) -> str:
-    return FineReportTools().get_report_sample(report_url)
+    cache_key = f"fr_sample:{report_url}"
+    cached = cache_manager.get(cache_key)
+    if cached is not None:
+        logger.info(f"[缓存命中] report_sample {report_url}")
+        return cached
+    result = FineReportTools().get_report_sample(report_url)
+    cache_manager.set(cache_key, result, expire=3 * 86400)
+    return result
 
 
 def _fr_download_fine_by_filter(
