@@ -557,54 +557,33 @@ fine_cpt_search = FineCptSearch()
 # MCP 工具
 # =============================================================================
 
-@fine_cpt_mcp.tool(name="lineage")
+@fine_cpt_mcp.tool(name="search")
 @log_function_info
-def cpt_lineage_search(
-    code_path: Optional[str] = None,
-    source_table: Optional[str] = None,
-    target_table: Optional[str] = None,
-    jump_link: Optional[str] = None,
-    lineage_type: Optional[str] = None,
-    display_name: Optional[str] = None,
+def cpt_search(
+    name: str,
     page: int = 1,
     page_size: int = 20,
 ) -> str:
     """
-    帆软 CPT 血缘检索工具
+    按报表名称检索 CPT 文件及其血缘信息。
 
-    在已采集的 CPT 血缘数据中进行多维度检索，返回满足条件的 CPT 文件及其完整血缘信息。
-
-    典型应用场景：
-    - 想看某个 CPT 的所有上游表（数据来源）→ code_path 填报表路径，lineage_type=0
-    - 想看某个 CPT 的所有下游表（填报去向）→ code_path 填报表路径，lineage_type=1
-    - 想知道哪些 CPT 用到了某张表（上游追溯）→ source_table 填表名
-    - 想知道哪些 CPT 向某张表写了数据（下游影响面）→ target_table 填表名
-    - 想看所有跳转链接关系 → lineage_type=2
-    - 只想找某项目的报表 → code_path 填目录前缀
-    - 想找名字包含某些字的报表 → display_name 填关键词
+    通过报表显示名关键词模糊匹配，返回所有命中的 CPT 文件基本信息及完整血缘关系。
 
     Args:
-        code_path: CPT 文件路径过滤（前缀/包含匹配），如 "data_center/daifa/"
-        source_table: 上游表名过滤（支持模糊匹配、前缀*，如 "dim_" 匹配所有 dim_ 开头的表）
-        target_table: 下游表名过滤（同上）
-        jump_link: 跳转链接关键词（匹配 target_link 或完整表名字段）
-        lineage_type: 血缘类型，"0"=来源表，"1"=去向表，"2"=跳转链接，"3"=API调用（暂不可用），"全部"（默认）
-        display_name: 报表显示名关键词（忽略大小写，含空格分词）
-        page: 页码，从1开始（可选，默认1）
-        page_size: 每页返回的 CPT 文件数，默认20，最多50（可选）
+        name:  查询关键词（必填，区分大小写，支持空格分词多词匹配）
+        page:  页码，从1开始（可选，默认1）
+        page_size: 每页返回数，默认20，最多50（可选）
 
     Returns:
-        JSON 格式的检索结果，含 results（CPT 对象列表）及 pagination（分页信息）
+        JSON 格式结果，含 results（每条含 display_name、cpt_path、
+        source_tables、target_tables、jump_links）及 pagination 分页信息
     """
+    if not name or not name.strip():
+        return json.dumps({"error": "name 参数不能为空"}, ensure_ascii=False, indent=2)
     result = fine_cpt_search.search_lineage(
-        code_path=code_path,
-        source_table=source_table,
-        target_table=target_table,
-        jump_link=jump_link,
-        lineage_type=lineage_type,
-        display_name=display_name,
+        display_name=name.strip(),
         page=page,
-        page_size=page_size,
+        page_size=min(max(page_size, 1), 50),
     )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -621,9 +600,6 @@ def cpt_search_by_table(
     根据表名查找所有关联的 CPT 文件
 
     这是最常用的逆向查询入口：通过一张表名，找到所有用到它作为数据来源或写入目标的 CPT 报表。
-
-    与 lineage_search 的区别在于：本接口专门服务于"以表为中心"的反查，是血缘追溯的核心工具；
-    lineage_search 则更适合以 CPT 为中心的正查或多条件交叉过滤。
 
     Args:
         table_name: 要查询的表名（必填，支持模糊匹配，如 "dim_" 等）

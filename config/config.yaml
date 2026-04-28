@@ -116,3 +116,4 @@ fine_report:
   password: 
   login_url: 'http://125.1.129.76:8080/fr/'
   cdp_url: 'http://125.1.129.153:10000'
+  fine_report_prefix: 'http://125.1.129.131:8081/wuhan/whjc/view/report?viewlet='
