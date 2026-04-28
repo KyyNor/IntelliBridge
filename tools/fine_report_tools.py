@@ -10,6 +10,7 @@ import uuid
 import json
 import shutil
 import tempfile
+from urllib.parse import quote, quote_plus
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 
@@ -22,7 +23,7 @@ from utils.cache import cache as cache_manager
 
 from fastmcp import FastMCP
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # 全局面板浏览器管理（通过 CDP URL 连接远端 Chrome，同 fine_report_snapshot）
@@ -615,11 +616,18 @@ class FineReportTools:
 # 公开工具函数（MCP 工具底层实现，供 router 和 MCP 共同调用）
 # ---------------------------------------------------------------------------
 
-def _fr_get_report_sample(report_url: str) -> str:
-    cache_key = f"fr_sample:{report_url}"
+def _build_report_url(report_path: str) -> str:
+    """将 CPT 路径拼接为完整报表 URL，前缀从配置读取"""
+    prefix = config.get("fine_report.fine_report_prefix", "")
+    return prefix.rstrip("/") + "/" + quote(quote_plus(report_path))
+
+
+def _fr_get_report_sample(report_path: str) -> str:
+    report_url = _build_report_url(report_path)
+    cache_key = f"fr_sample:{report_path}"
     cached = cache_manager.get(cache_key)
     if cached is not None:
-        logger.info(f"[缓存命中] report_sample {report_url}")
+        logger.info(f"[缓存命中] report_sample {report_path}")
         return cached
     result = FineReportTools().get_report_sample(report_url)
     cache_manager.set(cache_key, result, expire=3 * 86400)
@@ -627,15 +635,16 @@ def _fr_get_report_sample(report_url: str) -> str:
 
 
 def _fr_download_fine_by_filter(
-    report_url: str,
+    report_path: str,
     controls: List[Dict[str, Any]] = None,
     locators: Optional[Dict[str, Any]] = None,
     target_date: str = "",
 ) -> str:
     if controls is None:
         controls = []
+    report_url = _build_report_url(report_path)
 
-    cache_key = f"fr_download:{report_url}:{json.dumps(controls, sort_keys=True)}:{target_date}"
+    cache_key = f"fr_download:{report_path}:{json.dumps(controls, sort_keys=True)}:{target_date}"
     cached = cache_manager.get(cache_key)
     if cached is not None:
         logger.info(f"[缓存命中] download_fine_by_filter {report_url} controls={controls} target_date={target_date}")
@@ -660,23 +669,23 @@ fr_mcp = FastMCP("IntelliBridge FineReport")
 
 @fr_mcp.tool(name="get_report_sample")
 @log_function_info
-def fr_get_report_sample(report_url: str) -> str:
+def fr_get_report_sample(report_path: str) -> str:
     """
     获取 FineReport 报表样例：返回报表上的控件清单和当前页面数据的 Markdown 摘要。
 
     Args:
-        report_url: FineReport 报表的完整 URL（如 DecisionEngine 访问地址）
+        report_path: FineReport 报表的 CPT 路径（如 /a/b/cpt）
 
     Returns:
         Markdown 格式的抽样信息
     """
-    return _fr_get_report_sample(report_url)
+    return _fr_get_report_sample(report_path)
 
 
 @fr_mcp.tool(name="download_fine_by_filter")
 @log_function_info
 def fr_download_fine_by_filter(
-    report_url: str,
+    report_path: str,
     controls: List[Dict[str, Any]] = None,
     target_date: str = "",
 ) -> str:
@@ -684,7 +693,7 @@ def fr_download_fine_by_filter(
     设控件值、从 FineReport 下载 Excel、并按提取规则返回结构化数据。
 
     Args:
-        report_url:   FineReport 报表完整 URL
+        report_path:  FineReport 报表的 CPT 路径（如 /abc/test.cpt）
         controls:     控件操作列表，如 [{'name': '分行', 'value': '武汉'}, ...]
         target_date:  可选，指定年月（yyyy-MM-dd），自动识别日期控件并填入
 
@@ -692,7 +701,7 @@ def fr_download_fine_by_filter(
         JSON 字符串，内含 success、data（结构化结果）或 download_path 字段
     """
     return _fr_download_fine_by_filter(
-        report_url=report_url,
+        report_path=report_path,
         controls=controls or [],
         locators=None,
         target_date=target_date,
@@ -707,11 +716,11 @@ fr_router = APIRouter(prefix="/api/fine-report", tags=["FineReport"])
 
 
 class SampleReq(BaseModel):
-    report_url: str
+    report_path: str = Field(description="FineReport 报表的 CPT 路径（如 /abc/test.cpt）")
 
 
 class DownloadReq(BaseModel):
-    report_url: str
+    report_path: str = Field(description="FineReport 报表的 CPT 路径（如 /abc/test.cpt）")
     controls: List[Dict[str, Any]] = []
     locators: Optional[Dict[str, Any]] = None
     target_date: str = ""
@@ -720,14 +729,14 @@ class DownloadReq(BaseModel):
 @fr_router.post("/sample")
 async def api_sample(req: SampleReq) -> dict:
     """REST 接口：获取报表样例"""
-    return {"data": _fr_get_report_sample(req.report_url)}
+    return {"data": _fr_get_report_sample(req.report_path)}
 
 
 @fr_router.post("/download")
 async def api_download(req: DownloadReq) -> dict:
     """REST 接口：设控件值、下载 Excel、按提取规则返回数据"""
     return {"data": _fr_download_fine_by_filter(
-        report_url=req.report_url,
+        report_path=req.report_path,
         controls=req.controls,
         locators=req.locators,
         target_date=req.target_date,
