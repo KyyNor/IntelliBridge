@@ -10,7 +10,7 @@ from utils.mysql_pool import mysql_pool
 
 
 def _save_func_call_log(request_id: str, func_name: str, module: str, params: dict,
-                         started_at: datetime, elapsed_ms: int, is_success: bool, error_msg: str = ""):
+                         started_at: datetime, elapsed: int, is_success: bool, error_msg: str = ""):
     """异步触发函数调用日志入库（fire-and-forget，后台线程执行）"""
     params_json = json.dumps(params, ensure_ascii=False, default=str)
     started_at_str = started_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -18,7 +18,7 @@ def _save_func_call_log(request_id: str, func_name: str, module: str, params: di
     def _do_insert():
         sql = """
             INSERT INTO llm_func_call_log
-                (request_id, func_name, module, params, started_at, elapsed_ms, is_success, error_msg)
+                (request_id, func_name, module, params, started_at, elapsed, is_success, error_msg)
             VALUES
                 (%s, %s, %s, %s, %s, %s, %s, %s)
         """
@@ -27,7 +27,7 @@ def _save_func_call_log(request_id: str, func_name: str, module: str, params: di
                 with conn.cursor() as cursor:
                     cursor.execute(sql, (
                         request_id, func_name, module, params_json,
-                        started_at_str, elapsed_ms, 1 if is_success else 0, error_msg,
+                        started_at_str, elapsed, 1 if is_success else 0, error_msg,
                     ))
                 conn.commit()
         except Exception:
@@ -79,7 +79,7 @@ def log_function_info(func: Callable) -> Callable:
 
             # 入库
             _save_func_call_log(request_id, func_name, module, kwargs,
-                                started_ts, elapsed, True)
+                                started_ts, elapsed, True, "")
 
             return result
 
