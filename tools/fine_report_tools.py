@@ -565,10 +565,18 @@ class FineReportTools:
                 data = extract_data_from_excel(str(tmp_file), locators)
                 return json.dumps({"success": True, "data": data}, ensure_ascii=False, indent=2)
             else:
+                # fallback：无 locators 时返回整张 Excel 的内容
+                import pandas as pd
+                df = pd.read_excel(str(tmp_file), header=None)
+                excel_json = {
+                    "columns": [str(c) for c in df.columns.tolist()],
+                    "rows": df.values.tolist(),
+                    "shape": [df.shape[0], df.shape[1]],
+                }
                 return json.dumps({
                     "success": True,
-                    "data": {},
-                    "message": "下载完成，未提供提取规则（locators）。可通过 download_dir 找到文件。",
+                    "data": excel_json,
+                    "message": "未提供 locators，已返回整表内容",
                     "download_path": str(tmp_file),
                 }, ensure_ascii=False, indent=2)
 
@@ -609,12 +617,21 @@ def _fr_download_fine_by_filter(
 ) -> str:
     if controls is None:
         controls = []
-    return FineReportTools().download_fine_by_filter(
+
+    cache_key = f"fr_download:{report_url}:{json.dumps(controls, sort_keys=True)}:{target_date}"
+    cached = cache_manager.get(cache_key)
+    if cached is not None:
+        logger.info(f"[缓存命中] download_fine_by_filter {report_url} controls={controls} target_date={target_date}")
+        return cached
+
+    result = FineReportTools().download_fine_by_filter(
         report_url=report_url,
         controls=controls,
         locators=locators,
         target_date=target_date,
     )
+    cache_manager.set(cache_key, result, expire=86400)
+    return result
 
 
 # ---------------------------------------------------------------------------
