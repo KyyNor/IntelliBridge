@@ -517,6 +517,72 @@ class FineReportTools:
                     pass
 
     # ------------------------------------------------------------------
+    # 共用底层：从打开报表到下载到本地文件
+    # ------------------------------------------------------------------
+
+    def _download_to_local_file(
+        self,
+        report_url: str,
+        controls: List[Dict[str, Any]],
+        target_date: str,
+    ) -> tuple[Path, Page]:
+        """
+        执行打开报表→设控件→触发下载→复制文件到本地临时目录的全流程。
+        返回 (本地文件路径, page对象)。
+        调用方负责在 finally 中关闭 page 并删除文件。
+        """
+        context = _get_browser_context()
+        page = context.new_page()
+
+        page.goto(report_url, wait_until="networkidle")
+        page.wait_for_load_state("networkidle")
+        time.sleep(3)
+
+        _ensure_logged_in(page)
+        page.wait_for_load_state("networkidle")
+
+        page.goto(report_url, wait_until="networkidle")
+        logger.info(f"[FR] goto 完成，当前实际页面 URL: {page.url}")
+        page.wait_for_load_state("networkidle")
+
+        # 自动填日期控件
+        _auto_fill_date_control(page, target_date)
+
+        # 设普通控件
+        for ctrl in controls:
+            name = ctrl.get("name", "")
+            value = ctrl.get("value", "")
+            if not name:
+                continue
+            escaped_value = str(value).replace('"', '\\"')
+            page.evaluate(
+                f'_g().getParameterContainer().getWidgetByName("{name}").setValue("{escaped_value}")'
+            )
+        page.evaluate("_g().parameterCommit()")
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(3000)
+        logger.info("控件已设置并提交")
+
+        # 下载 Excel
+        dl_dir = Path(self.download_dir)
+        dl_dir.mkdir(parents=True, exist_ok=True)
+
+        with page.expect_download(timeout=self.download_timeout_ms) as dl_info:
+            page.evaluate("_g().exportReportToExcel('simple')")
+
+        download_file_path = f'{self.browserless_download_path}/{dl_info.value.suggested_filename}'
+        _wait_for_file_stable(download_file_path)
+
+        fname = f"fr_sample_{uuid.uuid4().hex[:8]}.xlsx"
+        tmp_file = dl_dir / fname
+
+        logger.info(f"文件最终存储路径：{tmp_file}")
+        shutil.copy(download_file_path, tmp_file)
+        return tmp_file, page
+
+    # ------------------------------------------------------------------
+    # 公开 API
+    # ------------------------------------------------------------------
 
     def download_fine_by_filter(
         self,
@@ -532,69 +598,22 @@ class FineReportTools:
             report_url:   FineReport 报表完整 URL
             controls:     普通控件操作列表，格式: [{'name': '控件名', 'value': '值'}, ...]
             locators:     数据提取规则，见 extract_data_from_excel
-            target_date:  可选，指定目标月份最后一天的日期（格式 yyyy-MM-dd），
-                          若报表含日期控件会自动识别并填入
+            target_date:  可选，指定目标月份最后一天的日期（格式 yyyy-MM-dd）
 
         Returns:
-            JSON 字符串: {"success": true/false, "data": {...}, "error": ""}
+            {"success": true/false, "data": {...}, "error": ""}
         """
         logger.info(
             f"download_fine_by_filter 开始 | url={report_url} | "
             f"target_date={target_date} | controls={controls}"
         )
 
-        context = _get_browser_context()
-        page: Optional[Page] = None
+        page = None
         tmp_file = None
 
         try:
-            page = context.new_page()
-            page.goto(report_url, wait_until="networkidle")
-            page.wait_for_load_state("networkidle")
-            time.sleep(3)
+            tmp_file, page = self._download_to_local_file(report_url, controls, target_date)
 
-            _ensure_logged_in(page)
-            page.wait_for_load_state("networkidle")
-
-            page.goto(report_url, wait_until="networkidle")
-            logger.info(f"[FR download] goto 完成，当前实际页面 URL: {page.url}")
-            page.wait_for_load_state("networkidle")
-
-            # 自动填日期控件
-            _auto_fill_date_control(page, target_date)
-
-            # 设普通控件
-            for ctrl in controls:
-                name = ctrl.get("name", "")
-                value = ctrl.get("value", "")
-                if not name:
-                    continue
-                escaped_value = str(value).replace('"', '\\"')
-                page.evaluate(
-                    f'_g().getParameterContainer().getWidgetByName("{name}").setValue("{escaped_value}")'
-                )
-            page.evaluate("_g().parameterCommit()")
-            page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(3000)
-            logger.info("控件已设置并提交")
-
-            # 下载 Excel
-            dl_dir = Path(self.download_dir)
-            dl_dir.mkdir(parents=True, exist_ok=True)
-
-            with page.expect_download(timeout=self.download_timeout_ms) as dl_info:
-                page.evaluate("_g().exportReportToExcel('simple')")
-
-            download_file_path = f'{self.browserless_download_path}/{dl_info.value.suggested_filename}'
-            _wait_for_file_stable(download_file_path)
-
-            fname = f"fr_sample_{uuid.uuid4().hex[:8]}.xlsx"
-            tmp_file = dl_dir / fname
-
-            logger.info(f"文件最终存储路径：{tmp_file}")
-            shutil.copy(download_file_path, tmp_file)
-
-            # 提取数据
             if locators:
                 data = extract_data_from_excel(str(tmp_file), locators)
                 return {"success": True, "data": data}
@@ -627,6 +646,135 @@ class FineReportTools:
                 except Exception:
                     pass
 
+    def download_fine_paginated(
+        self,
+        report_url: str,
+        controls: List[Dict[str, Any]],
+        target_date: str = "",
+        *,
+        page_num: int = 1,
+        rows_per_page: int = 100,
+    ) -> Dict[str, Any]:
+        """
+        设控件值 → 下载Excel → 自动推断表头行 → 返回 CSV 式分页数据。
+
+        表头自动推断策略：在前 max_header_scan 行中找到非空比例最高的行；
+        该行每格若为 NaN 则沿用上一格的值（模拟合并单元格的向下延伸）。
+
+        Args:
+            report_url:     FineReport 报表完整 URL
+            controls:       普通控件操作列表
+            target_date:    可选，目标日期（格式 yyyy-MM-dd）
+            page_num:       页码（从1起），默认1
+            rows_per_page:  每页行数，默认100
+
+        Returns:
+            {
+                "success": true/false,
+                "headers": ["排名","网点"...],      # 推断不到时为空[]
+                "pre_headers": "...",              # 表头以上的行，逗号拼接，空值不参与
+                "rows": [["1","汉正街支行",...], ...],
+                "page_num": 1,
+                "total_num": 83,
+                "total_pages": 1,
+            }
+            出错时: {"success": false, "error": "..."}
+        """
+        logger.info(
+            f"download_fine_paginated 开始 | url={report_url} | "
+            f"target_date={target_date} | page_num={page_num}"
+        )
+
+        import pandas as pd
+
+        page_obj = None
+        tmp_file = None
+
+        try:
+            tmp_file, page_obj = self._download_to_local_file(report_url, controls, target_date)
+
+            df = pd.read_excel(str(tmp_file), header=None)
+            total_rows = len(df)
+            num_cols = len(df.columns)
+
+            # ---- 推断表头：在前 HEADER_SCAN_MAX_ROWS 行中选非空比例最高的，
+            #              且该比例须 >= HEADER_MIN_RATIO，否则视为未推断到 ----
+            HEADER_SCAN_MAX_ROWS = 5
+            HEADER_MIN_RATIO = 0.4
+            header_row_idx = 0
+            max_valid_ratio = -1.0
+
+            scan_end = min(HEADER_SCAN_MAX_ROWS, total_rows)
+            for i in range(scan_end):
+                row_vals = df.iloc[i]
+                non_null = sum(1 for v in row_vals if pd.notna(v) and str(v).strip() != "")
+                ratio = non_null / num_cols if num_cols else 0
+                if ratio > max_valid_ratio:
+                    max_valid_ratio = ratio
+                    header_row_idx = i
+
+            header_found_flag = max_valid_ratio >= HEADER_MIN_RATIO
+
+            # ---- 构建表头：推断成功时生成列名列表；否则为空 ----
+            if header_found_flag:
+                header_raw = df.iloc[header_row_idx].tolist()
+                headers = []
+                last_valid = ""
+                for v in header_raw:
+                    if pd.notna(v) and str(v).strip():
+                        last_valid = str(v).strip()
+                    headers.append(last_valid if last_valid else "")
+            else:
+                headers = []
+
+            # ---- 构建 pre_headers：表头行之前的所有行，非空值用逗号拼接 ----
+            pre_row_strings: List[str] = []
+            for i in range(header_row_idx if header_found_flag else total_rows):
+                cells = df.iloc[i]
+                joined_parts = [
+                    str(c).strip()
+                    for c in cells
+                    if pd.notna(c) and str(c).strip() != ""
+                ]
+                pre_row_strings.append(",".join(joined_parts))
+
+            pre_headers = ",".join(pre_row_strings)
+
+            # ---- 确定数据起始行 ----
+            data_start = header_row_idx + 1 if header_found_flag else 0
+            data_df = df.drop(range(data_start))
+
+            # 计算分页
+            total_items = len(data_df)
+            total_pages = max(1, (total_items + rows_per_page - 1) // rows_per_page)
+            page_num = max(1, min(page_num, total_pages))  # 边界约束
+            start = (page_num - 1) * rows_per_page
+            end = start + rows_per_page
+            page_rows = data_df.iloc[start:end].values.tolist()
+
+            return {
+                "success": True,
+                "headers": headers,
+                "pre_headers": pre_headers,
+                "rows": page_rows,
+                "page_num": page_num,
+                "total_num": total_items,
+                "total_pages": total_pages,
+            }
+
+        except Exception as e:
+            logger.exception(f"download_fine_paginated 失败: {e}")
+            return {"success": False, "error": str(e)}
+
+        finally:
+            if page_obj:
+                page_obj.close()
+            if tmp_file and tmp_file.exists():
+                try:
+                    tmp_file.unlink()
+                except Exception:
+                    pass
+
 
 # ---------------------------------------------------------------------------
 # 公开工具函数（MCP 工具底层实现，供 router 和 MCP 共同调用）
@@ -652,6 +800,40 @@ def _fr_get_report_sample(report_path: str) -> str:
         cache_manager.set(cache_key, result, expire=3 * 86400)
     else:
         logger.warning(f"[缓存跳过] report_sample {report_path} 登录/下载失败，不予缓存")
+    return result
+
+
+def _fr_download_fine_paginated(
+    report_path: str,
+    controls: List[Dict[str, Any]] = None,
+    target_date: str = "",
+    *,
+    page_num: int = 1,
+    rows_per_page: int = 100,
+) -> Dict[str, Any]:
+    if controls is None:
+        controls = []
+    report_url = _build_report_url(report_path)
+    logger.info(f"[FR] 拼接报表 URL: {report_url}")
+
+    cache_key = f"fr_paginated:{report_path}:{json.dumps(controls, sort_keys=True)}:{target_date}:{page_num}:{rows_per_page}"
+    cached = cache_manager.get(cache_key)
+    if cached is not None:
+        logger.info(f"[缓存命中] download_fine_paginated {report_url} page_num={page_num}")
+        return cached
+
+    result = _fr_executor.submit(
+        FineReportTools().download_fine_paginated,
+        report_url, controls, target_date,
+        page_num=page_num, rows_per_page=rows_per_page,
+    ).result()
+    try:
+        if result.get("success"):
+            cache_manager.set(cache_key, result, expire=86400)
+        else:
+            logger.warning(f"[缓存跳过] download_fine_paginated {report_path} 请求失败，不予缓存")
+    except Exception:
+        logger.warning(f"[缓存跳过] download_fine_paginated {report_path} 无法解析返回值，不予缓存")
     return result
 
 
@@ -735,6 +917,47 @@ def fr_download_fine_by_filter(
     )
 
 
+@fr_mcp.tool(name="download_fine_paginated")
+@log_function_info
+def fr_download_fine_paginated(
+    report_path: str,
+    controls: List[Dict[str, Any]] = None,
+    target_date: str = "",
+    page_num: int = 1,
+    rows_per_page: int = 100,
+) -> Dict[str, Any]:
+    """
+    设控件值、从 FineReport 下载 Excel，以 CSV 格式返回分页数据。
+
+    表头自动推断：在前 5 行中选用非空比例最高的行，空格用前一个非空值填充。
+
+    Args:
+        report_path:   FineReport 报表的 CPT 路径（如 /abc/test.cpt）
+        controls:       控件操作列表，如 [{'name': '分行', 'value': '武汉'}, ...]
+        target_date:    可选，指定年月（yyyy-MM-dd），自动识别日期控件并填入
+        page_num:       页码，从1起，默认1
+        rows_per_page:  每页行数，默认100
+
+    Returns:
+        {
+            "success": true/false,
+            "headers": ["排名","网点"...],     # 推断不到时为[]
+            "pre_headers": "...",             # 表头以上的行，逗号拼接，空值不参与
+            "rows": [["1","汉正街支行",...], ...],
+            "page_num": 1,
+            "total_num": 83,
+            "total_pages": 1
+        }
+    """
+    return _fr_download_fine_paginated(
+        report_path=report_path,
+        controls=controls or [],
+        target_date=target_date,
+        page_num=page_num,
+        rows_per_page=rows_per_page,
+    )
+
+
 # ---------------------------------------------------------------------------
 # FastAPI 路由（与 MCP 平行提供，便于调试和直接 curl 调用）
 # ---------------------------------------------------------------------------
@@ -753,6 +976,14 @@ class DownloadReq(BaseModel):
     target_date: str = ""
 
 
+class PaginatedReq(BaseModel):
+    report_path: str = Field(description="FineReport 报表的 CPT 路径（如 /abc/test.cpt）")
+    controls: List[Dict[str, Any]] = []
+    target_date: str = ""
+    page_num: int = Field(default=1, ge=1, description="页码，从1起")
+    rows_per_page: int = Field(default=100, ge=1, le=1000, description="每页行数")
+
+
 @fr_router.post("/sample")
 async def api_sample(req: SampleReq) -> dict:
     """REST 接口：获取报表样例"""
@@ -767,4 +998,16 @@ async def api_download(req: DownloadReq) -> dict:
         controls=req.controls,
         locators=req.locators,
         target_date=req.target_date,
+    )}
+
+
+@fr_router.post("/paginated")
+async def api_paginated(req: PaginatedReq) -> dict:
+    """REST 接口：CSV 式分页下载 Excel 数据"""
+    return {"data": _fr_download_fine_paginated(
+        report_path=req.report_path,
+        controls=req.controls,
+        target_date=req.target_date,
+        page_num=req.page_num,
+        rows_per_page=req.rows_per_page,
     )}
