@@ -24,11 +24,11 @@ agent_browser:
 # MySQL 连接配置
 mysql:
   nodes:
-    - name: local_node
+    - name: mysql_121
       host: "localhost"
       port: 3306
-      username: "intellibridge"
-      password: "intellibridge_password"
+      username: "root"
+      password: "root"
       charset: "utf8mb4"
       databases:
         - name: intellibridge

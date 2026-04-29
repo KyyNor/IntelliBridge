@@ -17,6 +17,9 @@ ds_search_mcp = FastMCP("IntelliBridge DolphinScheduler Search")
 class DataFactoryCodeSearch:
     """DolphinScheduler 代码检索工具类"""
 
+    # 需要展示数据源信息的 lineage_type 白名单
+    DATASOURCE_TYPES = frozenset({"SQL", "SHELL_SQL", "SHELL_SQOOP", "SHELL_TRINO_SYNC"})
+
     MAX_LIMIT = 1000
     DEFAULT_PAGE_SIZE = 50
     REGEX_TIMEOUT = 5  # 秒
@@ -80,7 +83,7 @@ class DataFactoryCodeSearch:
 
             logger.info("开始加载血缘数据到缓存...")
             try:
-                # 从数据库查询全量数据
+                # 从数据库查询全量数据（已扩展新字段）
                 sql = """
                     SELECT
                         project_name,
@@ -88,12 +91,15 @@ class DataFactoryCodeSearch:
                         task_name,
                         process_status,
                         task_status,
+                        from_source,
+                        from_host,
+                        to_source,
+                        to_host,
                         from_database_table,
                         to_database_table,
                         sql_code,
                         lineage_type
                     FROM metadata_ds_table_lineage
-                    WHERE sql_code IS NOT NULL AND sql_code != ''
                 """
 
                 with mysql_pool.get_connection("mysql_121_data_factory") as conn:
@@ -126,7 +132,7 @@ class DataFactoryCodeSearch:
                         grouped_tasks[group_key] = []
                     grouped_tasks[group_key].append(row)
 
-                # 第二步：为每个分组构建缓存对象，合并输入输出表
+                # 第二步：为每个分组构建缓存对象，合并输入输出表，并采集数据源信息
                 for group_key, rows in grouped_tasks.items():
                     project_name, process_name, task_name, process_status, task_status, sql_code, lineage_type = group_key
 
@@ -136,6 +142,12 @@ class DataFactoryCodeSearch:
                     # 合并所有行的输入表（去重）
                     from_tables_set = set()
                     to_tables_set = set()
+
+                    # 数据源字段：从同组多条记录中各自取值，取第一个非空（同一任务一般一致）
+                    from_source_val = None
+                    from_host_val = None
+                    to_source_val = None
+                    to_host_val = None
 
                     for row in rows:
                         if row.get('from_database_table'):
@@ -149,16 +161,26 @@ class DataFactoryCodeSearch:
                                 if t:
                                     to_tables_set.add(t)
 
+                        # 取第一条非空的来源信息
+                        if from_source_val is None and row.get('from_source'):
+                            from_source_val = row['from_source']
+                        if from_host_val is None and row.get('from_host'):
+                            from_host_val = row['from_host']
+                        if to_source_val is None and row.get('to_source'):
+                            to_source_val = row['to_source']
+                        if to_host_val is None and row.get('to_host'):
+                            to_host_val = row['to_host']
+
                     from_tables = sorted(from_tables_set)  # 转列表并排序，保证一致性
                     to_tables = sorted(to_tables_set)
 
                     # 按行拆分的代码（便于正则匹配）
-                    sql_lines = sql_code.split('\n')
+                    sql_lines = (sql_code or '').split('\n')
 
                     # 计算任务状态
                     task_status_value = self.determine_task_status(process_status, task_status)
 
-                    # 构建缓存对象
+                    # 构建缓存对象（已扩展数据源字段）
                     task_obj = {
                         "project_name": project_name,
                         "process_name": process_name,
@@ -168,9 +190,13 @@ class DataFactoryCodeSearch:
                         "lineage_type": lineage_type,
                         "from_database_table": from_tables,
                         "to_database_table": to_tables,
-                        "sql_code": sql_code,
+                        "sql_code": sql_code or '',
                         "sql_lines": sql_lines,
-                        "任务状态": task_status_value
+                        "任务状态": task_status_value,
+                        "from_source": from_source_val,
+                        "from_host": from_host_val,
+                        "to_source": to_source_val,
+                        "to_host": to_host_val,
                     }
 
                     # 存入主缓存（key就是完整的code_path路径字符串）
@@ -519,15 +545,28 @@ class DataFactoryCodeSearch:
             code_preview = '\n'.join(code_lines[:100])
             total_lines = len(code_lines)
 
-            tasks.append({
+            # 仅在白名单内的 lineage_type 才追加数据源相关字段
+            lineage_type = task_obj.get("lineage_type", "")
+
+            task_result = {
                 "code_path": code_path_key,
-                "任务类型": task_obj.get("lineage_type", "SQL"),
+                "任务类型": lineage_type,
                 "代码": code_preview,
                 "代码行数": total_lines,
                 "任务状态": task_obj.get("任务状态", "未知"),
                 "输入表清单": task_obj.get("from_database_table", []),
-                "输出表清单": task_obj.get("to_database_table", [])
-            })
+                "输出表清单": task_obj.get("to_database_table", []),
+            }
+
+            if lineage_type in self.DATASOURCE_TYPES:
+                def fmt(val):
+                    return val if val else "未知"
+                task_result["来源数据类型"] = fmt(task_obj.get("from_source"))
+                task_result["来源数据IP"] = fmt(task_obj.get("from_host"))
+                task_result["目标数据类型"] = fmt(task_obj.get("to_source"))
+                task_result["目标数据IP"] = fmt(task_obj.get("to_host"))
+
+            tasks.append(task_result)
 
         logger.info(f"查询完成，共返回 {len(tasks)} 条任务")
         return tasks
@@ -620,12 +659,16 @@ def datafactory_task_info(
     Returns:
         JSON 格式的任务详情列表，每个元素包含：
         - code_path: 任务完整路径
-        - 任务类型：SQL 或 SHELL_SQL
+        - 任务类型：SQL / SHELL_SQL / SHELL_SQOOP / SHELL_TRINO_SYNC
         - 代码：任务的前100行代码
         - 代码行数：总行数
         - 任务状态：已上线/未上线
         - 输入表清单：该任务依赖的输入表列表
         - 输出表清单：该任务产出的输出表列表
+        - 来源数据类型：（仅在任务类型为 SQL/SHELL_SQL/SHELL_SQOOP/SHELL_TRINO_SYNC 时出现）来源数据类型，如 mysql/hive/trino，暂无则为 "未知"
+        - 来源数据IP：（同上）来源数据 IP，暂无则为 "未知"
+        - 目标数据类型：（同上）目标数据类型，暂无则为 "未知"
+        - 目标数据IP：（同上）目标数据 IP，暂无则为 "未知"
 
     注意：code_path、from_table、to_table 三个参数至少需要填写一个。
     """
