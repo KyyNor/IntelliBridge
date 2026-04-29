@@ -969,32 +969,6 @@ def fr_download_fine_paginated(
     )
 
 
-@fr_mcp.tool(name="download_fine_by_filter")
-@log_function_info
-def fr_download_fine_by_filter(
-    report_path: str,
-    controls: List[Dict[str, Any]] = None,
-    target_date: str = "",
-) -> Dict[str, Any]:
-    """
-    设控件值、从 FineReport 下载 Excel、并按提取规则返回结构化数据。
-
-    Args:
-        report_path:  FineReport 报表的 CPT 路径（如 /abc/test.cpt）
-        controls:     控件操作列表，如 [{'name': '分行', 'value': '武汉'}, ...]
-        target_date:  可选，指定年月（yyyy-MM-dd），自动识别日期控件并填入
-
-    Returns:
-        JSON 字符串，内含 success、data（结构化结果）或 download_path 字段
-    """
-    return _fr_download_fine_by_filter(
-        report_path=report_path,
-        controls=controls or [],
-        locators=None,
-        target_date=target_date,
-    )
-
-
 # ---------------------------------------------------------------------------
 # FastAPI 路由（与 MCP 平行提供，便于调试和直接 curl 调用）
 # ---------------------------------------------------------------------------
