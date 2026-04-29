@@ -780,6 +780,38 @@ class FineReportTools:
 # 公开工具函数（MCP 工具底层实现，供 router 和 MCP 共同调用）
 # ---------------------------------------------------------------------------
 
+def _executor_submit_and_wait(fn, *args, **kwargs):
+    """在线程池中执行 fn 并阻塞等待结果"""
+    return _fr_executor.submit(fn, *args, **kwargs).result()
+
+
+def _slice_page_from_base_result(
+    base_result: Dict[str, Any],
+    page_num: int,
+    rows_per_page: int,
+) -> Dict[str, Any]:
+    """
+    从已缓存的全量结果中，按 page_num + rows_per_page 切出一页返回。
+    缓存命中时走此路径，保证不同 page_num 共享同一次 Excel 下载的结果。
+    """
+    total_items = base_result.get("total_num", 0)
+    total_pages = max(1, (total_items + rows_per_page - 1) // rows_per_page)
+    page_num = max(1, min(page_num, total_pages))
+    start = (page_num - 1) * rows_per_page
+    end = start + rows_per_page
+    page_rows = base_result.get("rows", [])[start:end]
+
+    return {
+        "success": True,
+        "headers": base_result.get("headers", []),
+        "pre_headers": base_result.get("pre_headers", ""),
+        "rows": page_rows,
+        "page_num": page_num,
+        "total_num": total_items,
+        "total_pages": total_pages,
+    }
+
+
 def _build_report_url(report_path: str) -> str:
     """将 CPT 路径拼接为完整报表 URL，前缀从配置读取"""
     prefix = config.get("fine_report.fine_report_prefix", "")
@@ -813,28 +845,34 @@ def _fr_download_fine_paginated(
 ) -> Dict[str, Any]:
     if controls is None:
         controls = []
+
+    # ---- 缓存键不含 page_num：同一报表同一参数共享一份全量数据缓存 ----
+    BASE_CACHE_KEY = f"fr_paginated_base:{report_path}:{json.dumps(controls, sort_keys=True)}:{target_date}"
+
+    cached_base = cache_manager.get(BASE_CACHE_KEY)
+    if cached_base is not None:
+        logger.info(f"[缓存命中·全量] download_fine_paginated {report_path}，正在从中切第 {page_num} 页")
+        return _slice_page_from_base_result(cached_base, page_num, rows_per_page)
+
+    # 缓存未命中，走完整下载流程（全量下载，全速缓存）
     report_url = _build_report_url(report_path)
     logger.info(f"[FR] 拼接报表 URL: {report_url}")
 
-    cache_key = f"fr_paginated:{report_path}:{json.dumps(controls, sort_keys=True)}:{target_date}:{page_num}:{rows_per_page}"
-    cached = cache_manager.get(cache_key)
-    if cached is not None:
-        logger.info(f"[缓存命中] download_fine_paginated {report_url} page_num={page_num}")
-        return cached
-
-    result = _fr_executor.submit(
+    base_result = _executor_submit_and_wait(
         FineReportTools().download_fine_paginated,
         report_url, controls, target_date,
-        page_num=page_num, rows_per_page=rows_per_page,
-    ).result()
-    try:
-        if result.get("success"):
-            cache_manager.set(cache_key, result, expire=86400)
-        else:
-            logger.warning(f"[缓存跳过] download_fine_paginated {report_path} 请求失败，不予缓存")
-    except Exception:
-        logger.warning(f"[缓存跳过] download_fine_paginated {report_path} 无法解析返回值，不予缓存")
-    return result
+        page_num=1, rows_per_page=9999999,
+    )
+
+    if not base_result.get("success"):
+        logger.warning(f"[缓存跳过] download_fine_paginated {report_path} 下载失败，不予缓存")
+        return base_result
+
+    # 仅成功时缓存全量结果
+    cache_manager.set(BASE_CACHE_KEY, base_result, expire=86400)
+    logger.info(f"[缓存写入] download_fine_paginated 全量结果已缓存，总行数={base_result.get('total_num')}，缓存 key: {BASE_CACHE_KEY}")
+
+    return _slice_page_from_base_result(base_result, page_num, rows_per_page)
 
 
 def _fr_download_fine_by_filter(
@@ -890,33 +928,6 @@ def fr_get_report_sample(report_path: str) -> str:
     """
     return _fr_get_report_sample(report_path)
 
-
-@fr_mcp.tool(name="download_fine_by_filter")
-@log_function_info
-def fr_download_fine_by_filter(
-    report_path: str,
-    controls: List[Dict[str, Any]] = None,
-    target_date: str = "",
-) -> Dict[str, Any]:
-    """
-    设控件值、从 FineReport 下载 Excel、并按提取规则返回结构化数据。
-
-    Args:
-        report_path:  FineReport 报表的 CPT 路径（如 /abc/test.cpt）
-        controls:     控件操作列表，如 [{'name': '分行', 'value': '武汉'}, ...]
-        target_date:  可选，指定年月（yyyy-MM-dd），自动识别日期控件并填入
-
-    Returns:
-        JSON 字符串，内含 success、data（结构化结果）或 download_path 字段
-    """
-    return _fr_download_fine_by_filter(
-        report_path=report_path,
-        controls=controls or [],
-        locators=None,
-        target_date=target_date,
-    )
-
-
 @fr_mcp.tool(name="download_fine_paginated")
 @log_function_info
 def fr_download_fine_paginated(
@@ -955,6 +966,32 @@ def fr_download_fine_paginated(
         target_date=target_date,
         page_num=page_num,
         rows_per_page=rows_per_page,
+    )
+
+
+@fr_mcp.tool(name="download_fine_by_filter")
+@log_function_info
+def fr_download_fine_by_filter(
+    report_path: str,
+    controls: List[Dict[str, Any]] = None,
+    target_date: str = "",
+) -> Dict[str, Any]:
+    """
+    设控件值、从 FineReport 下载 Excel、并按提取规则返回结构化数据。
+
+    Args:
+        report_path:  FineReport 报表的 CPT 路径（如 /abc/test.cpt）
+        controls:     控件操作列表，如 [{'name': '分行', 'value': '武汉'}, ...]
+        target_date:  可选，指定年月（yyyy-MM-dd），自动识别日期控件并填入
+
+    Returns:
+        JSON 字符串，内含 success、data（结构化结果）或 download_path 字段
+    """
+    return _fr_download_fine_by_filter(
+        report_path=report_path,
+        controls=controls or [],
+        locators=None,
+        target_date=target_date,
     )
 
 
