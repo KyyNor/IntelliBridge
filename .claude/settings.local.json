@@ -16,7 +16,8 @@
       "Bash(git commit -m \"fix: 修复代码审查中发现的问题\n\n- 修复 datetime.utcnow 已弃用问题，改用 func.now\\(\\)\n- 改进加密密钥管理，支持环境变量，增强警告提示\n- 收紧 CORS 配置，从配置文件读取允许的源\n- 数据库 URL 支持环境变量覆盖\")",
       "Bash(git add -A)",
       "Bash(git push:*)",
-      "Bash(git*)"
+      "Bash(git*)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''/home/data_center/whwangzeqi/intellibridge/tools/ds_client.py''\\).read\\(\\)\\); print\\(''语法正确''\\)\")"
     ]
   }
 }

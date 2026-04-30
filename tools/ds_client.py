@@ -32,7 +32,7 @@ if not BASE_URL or not TOKEN:
 ds_mcp = FastMCP("IntelliBridge DolphinScheduler")
 
 # API 路径
-PATH_PROJECTS = "/projects/list"
+PATH_PROJECTS = "/projects"
 PATH_WORKFLOWS = "/projects/{project_code}/process-definition"
 PATH_WORKFLOW_RELEASE = "/projects/{project_code}/process-definition/{workflow_code}/release"
 PATH_SCHEDULES = "/projects/{project_code}/schedules/list"
