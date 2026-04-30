@@ -107,6 +107,7 @@ class FineCptObject:
         return {
             "display_name": self.display_name,
             "full_template_path": self.full_template_path,
+            "cpt_file_path": self.cpt_file_path,
             "source_tables": infos_to_list(self.source_tables),
             "target_tables": infos_to_list(self.target_tables),
             "jump_links": infos_to_list(self.jump_links),
@@ -567,7 +568,7 @@ def cpt_search(
         page_size: 每页返回数，默认20，最多50（可选）
 
     Returns:
-        JSON 格式结果，含 results（每条含 display_name、cpt_path、
+        JSON 格式结果，含 results（每条含 display_name、full_template_path、cpt_file_path、
         source_tables、target_tables、jump_links）及 pagination 分页信息
     """
     if not name or not name.strip():

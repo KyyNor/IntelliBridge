@@ -20,6 +20,7 @@ from utils.config import config
 from utils.logger import logger
 from utils.decorators import log_function_info
 from utils.cache import cache as cache_manager
+from utils.mysql_pool import mysql_pool
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -777,6 +778,111 @@ class FineReportTools:
 
 
 # ---------------------------------------------------------------------------
+# CPT 名录防呆校验（从血缘表加载全量 cpt_file_path，首位有无 / 均等价）
+# ---------------------------------------------------------------------------
+
+class CptCatalog:
+    """CPT 物理路径白名单，基于 metadata_fine_cpt_lineage 构建"""
+
+    REFRESH_INTERVAL = 8 * 60 * 60  # 8 小时
+
+    def __init__(self):
+        self._paths: set = set()           # normalize 后的路径集合
+        self._loaded = False
+        self._timer = None
+
+    # ---- 对外 API ----
+
+    def contains(self, report_path: str) -> bool:
+        """报告路径是否在名录中（自动规范化后比较）"""
+        self._ensure_loaded()
+        norm = _normalize_cpt_path(report_path)
+        return norm in self._paths
+
+    def reload(self, force: bool = False):
+        """手动刷新名录"""
+        self._do_load(force=force)
+
+    def stats(self) -> dict:
+        return {"loaded": self._loaded, "count": len(self._paths)}
+
+    # ---- 内部 ----
+
+    def _ensure_loaded(self):
+        if not self._loaded:
+            self._do_load()
+
+    def _do_load(self, force: bool = False):
+        import threading
+        if self._loaded and not force:
+            return
+        logger.info("CptCatalog 开始加载 CPT 白名单...")
+        try:
+            paths = set()
+            sql = "SELECT DISTINCT cpt_file_path FROM metadata_fine_cpt_lineage WHERE cpt_file_path IS NOT NULL AND cpt_file_path != ''"
+            with mysql_pool.get_connection("mysql_121_data_factory") as conn:
+                cur = conn.cursor()
+                cur.execute(sql)
+                for row in cur.fetchall():
+                    cp = row.get("cpt_file_path") or ""
+                    if cp := _normalize_cpt_path(cp):
+                        paths.add(cp)
+                cur.close()
+            self._paths = paths
+            self._loaded = True
+            logger.info(f"CptCatalog 加载完成，共 {len(self._paths)} 个有效 CPT 路径")
+            # 定时刷新
+            if self._timer:
+                self._timer.cancel()
+            self._timer = threading.Timer(self.REFRESH_INTERVAL, self.reload, kwds={"force": True})
+            self._timer.daemon = True
+            self._timer.start()
+        except Exception as e:
+            logger.error(f"CptCatalog 加载失败: {e}，降级为不拦截")
+
+    def shutdown(self):
+        if self._timer:
+            self._timer.cancel()
+
+
+def _normalize_cpt_path(path: str) -> str:
+    """去除首尾空格和斜杠，统一大小写比对基准"""
+    if not path:
+        return ""
+    return path.strip().strip("/").strip("\\")
+
+
+_cpt_catalog = CptCatalog()
+
+
+def _validate_report_path(report_path: str) -> dict | None:
+    """
+    防呆校验：检查 report_path 是否在 CPT 名录中。
+    返回 None 表示通过；返回 dict 表示拒绝并携带错误信息。
+    """
+    if not report_path:
+        return {"success": False, "error": "report_path 不能为空"}
+
+    # 名录加载失败时打印警告但不拦截（保障服务可用性）
+    if not _cpt_catalog.stats()["loaded"]:
+        logger.warning("CptCatalog 尚未加载完成，跳过名校验，建议确认 metadata_fine_cpt_lineage 表可正常访问")
+        return None
+
+    if _cpt_catalog.contains(report_path):
+        return None
+
+    norm = _normalize_cpt_path(report_path)
+    logger.warning(f"report_path 不在 CPT 名录中，拒绝查询: {norm}")
+
+    # 提供友好提示，引导用户查证
+    hint = (
+        f"CPT 路径 '{norm}' 不在已知 CPT 名录中，请检查路径是否正确。"
+        f"当前名录共收录 {_cpt_catalog.stats()['count']} 个 CPT，可通过 fine_cpt_search 工具按显示名或表名反查正确路径。"
+    )
+    return {"success": False, "error": hint}
+
+
+# ---------------------------------------------------------------------------
 # 公开工具函数（MCP 工具底层实现，供 router 和 MCP 共同调用）
 # ---------------------------------------------------------------------------
 
@@ -819,6 +925,8 @@ def _build_report_url(report_path: str) -> str:
 
 
 def _fr_get_report_sample(report_path: str) -> str:
+    if err := _validate_report_path(report_path):
+        return f"# 错误\n{err['error']}"
     report_url = _build_report_url(report_path)
     logger.info(f"[FR] 拼接报表 URL: {report_url}")
     cache_key = f"fr_sample:{report_path}"
@@ -843,6 +951,8 @@ def _fr_download_fine_paginated(
     page_num: int = 1,
     rows_per_page: int = 100,
 ) -> Dict[str, Any]:
+    if err := _validate_report_path(report_path):
+        return err
     if controls is None:
         controls = []
 
@@ -881,6 +991,8 @@ def _fr_download_fine_by_filter(
     locators: Optional[Dict[str, Any]] = None,
     target_date: str = "",
 ) -> Dict[str, Any]:
+    if err := _validate_report_path(report_path):
+        return err
     if controls is None:
         controls = []
     report_url = _build_report_url(report_path)
