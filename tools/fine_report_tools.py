@@ -23,6 +23,7 @@ from utils.cache import cache as cache_manager
 from utils.mysql_pool import mysql_pool
 
 from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
 
 from fastmcp import FastMCP
 from fastapi import APIRouter
@@ -858,7 +859,11 @@ _cpt_catalog = CptCatalog()
 def _validate_report_path(report_path: str) -> dict | None:
     """
     防呆校验：检查 report_path 是否在 CPT 名录中。
-    返回 None 表示通过；返回 dict 表示拒绝并携带错误信息。
+    返回 None 表示通过；返回 dict 表示拒绝并携带近似推荐。
+
+    未命中时：
+    - 遍历全量 CPT 路径计算相似度（difflib SequenceMatcher）
+    - 返回相似度 > 0.7 的路径中得分最高的 3 条
     """
     if not report_path:
         return {"success": False, "error": "report_path 不能为空"}
@@ -872,14 +877,28 @@ def _validate_report_path(report_path: str) -> dict | None:
         return None
 
     norm = _normalize_cpt_path(report_path)
-    logger.warning(f"report_path 不在 CPT 名录中，拒绝查询: {norm}")
+    logger.warning(f"report_path 不在 CPT 名录中，计算近似匹配: {norm}")
 
-    # 提供友好提示，引导用户查证
-    hint = (
-        f"CPT 路径 '{norm}' 不在已知 CPT 名录中，请检查路径是否正确。"
-        f"当前名录共收录 {_cpt_catalog.stats()['count']} 个 CPT，可通过 fine_cpt_search 工具按显示名或表名反查正确路径。"
+    # 遍历全量路径，逐个计算相似度，收集 > 0.7 的结果
+    THRESHOLD = 0.7
+    MAX_HITS = 3
+    candidates: list[tuple[float, str]] = []
+
+    for candidate in _cpt_catalog._paths:
+        score = SequenceMatcher(None, norm, candidate).ratio()
+        if score > THRESHOLD:
+            candidates.append((score, candidate))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    top_hints = "；".join([f"{round(s, 3)}：{p}" for s, p in candidates[:MAX_HITS]])
+
+    error_msg = (
+        f"CPT 路径不在已知路径中，请检查路径是否正确。"
     )
-    return {"success": False, "error": hint}
+    if top_hints:
+        error_msg += f" 相似路径参考：{top_hints}"
+
+    return {"success": False, "error": error_msg}
 
 
 # ---------------------------------------------------------------------------
