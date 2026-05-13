@@ -56,40 +56,8 @@ mysql:
 
 # Memory (Mem0) 记忆模块配置
 memory:
-  # Qdrant 向量存储配置
-  qdrant:
-    url: "http://localhost:6333"
-    api_key: ""
-    path: "/app/data/qdrant"
-    collection_name: "intellibridge_memory"
-
-  # Embedding 配置 (OpenAI 兼容格式)
-  embedding:
-    base_url: "http://localhost:8000/v1"
-    api_key: "sk-test-key"
-    model: "text-embedding-3-small"
-    dimension: 1024
-
-  # LLM 配置 (用于 add 操作时的记忆提取)
-  llm:
-    provider: "openai"
-    base_url: "http://localhost:8000/v1"
-    api_key: "sk-test-key"
-    model: "qwen2.5"
-
-  # Reranker 配置 (用于搜索结果排序)
-  reranker:
-    provider: "llm_reranker"
-    base_url: "http://localhost:8000/v1"
-    api_key: "sk-test-key"
-    model: "qwen2.5"
-    top_k: 10
-
-  graph:
-    provider: "neo4j"
-    url: "bolt://neo4j:7687"
-    username: "neo4j"
-    password: "mem0graph"
+  base_url: "http://your-hunchbank-daemon:9321"
+  api_token: ""   # 若 daemon 需要认证
 
 # DolphinScheduler 配置
 dolphin_scheduler:

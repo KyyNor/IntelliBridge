@@ -8,7 +8,7 @@ from tools.hive_query import hive_mcp, router as hive_router
 from tools.agent_browser import agent_browser_mcp,router as agent_browser_router
 from tools.mysql_query import mysql_mcp,router as mysql_router
 from tools.fine_report_tools import fr_mcp, fr_router
-from tools.memory import Memory, memory_mcp
+from tools.memory import memory_mcp
 from tools.ds_code_search import ds_search_mcp, DataFactoryCodeSearch
 from tools.ds_client import ds_mcp
 from tools.fine_cpt_search import fine_cpt_mcp
