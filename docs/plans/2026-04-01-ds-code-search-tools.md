@@ -627,11 +627,10 @@ def query_task_info(
         if not task_obj:
             continue
 
-        # 截取前100行
+        # 截取前1000个字符
         sql_code = task_obj.get("sql_code", "") or ""
-        code_lines = sql_code.split('\n')
-        code_preview = '\n'.join(code_lines[:100])
-        total_lines = len(code_lines)
+        code_preview = sql_code[:1000]
+        total_lines = len(sql_code.split('\n'))
 
         tasks.append({
             "code_path": code_path_key,

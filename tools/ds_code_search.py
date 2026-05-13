@@ -539,11 +539,10 @@ class DataFactoryCodeSearch:
             if not task_obj:
                 continue
 
-            # 截取前100行
+            # 截取前1000个字符
             sql_code = task_obj.get("sql_code", "") or ""
-            code_lines = sql_code.split('\n')
-            code_preview = '\n'.join(code_lines[:100])
-            total_lines = len(code_lines)
+            code_preview = sql_code[:1000]
+            total_lines = len(sql_code.split('\n'))
 
             # 仅在白名单内的 lineage_type 才追加数据源相关字段
             lineage_type = task_obj.get("lineage_type", "")
