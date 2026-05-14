@@ -1,0 +1,39 @@
+# IntelliBridge 精简依赖 —— 按代码实际 import 整理
+
+# ── Web / API 框架 ───────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.35.0
+python-multipart==0.0.12
+pydantic==2.12.5
+annotated-types==0.7.0
+
+# ── 日志 & 配置 ──────────────────────────────────────────
+loguru==0.7.2
+pyyaml==6.0.3
+pytz==2026.1.post1
+
+# ── 本地存储 & 缓存 ──────────────────────────────────────
+diskcache==5.6.3
+
+# ── 数据查询 ─────────────────────────────────────────────
+pymysql==1.1.0              # MySQL 驱动
+DBUtils==3.1.0              # 连接池
+pyhive[hive_pure_sasl]==0.7.0  # Hive / Trino 连接
+sqlglot==25.27.0            # SQL 解析（血缘 / 防注入）
+requests==2.33.1            # DS API / FR 下载等 HTTP 调用
+tenacity==9.1.4             # 重试装饰器
+
+# ── MCP 服务 ─────────────────────────────────────────────
+fastmcp==3.1.0
+
+# ── FineReport 报表下载解析 ──────────────────────────────
+playwright                 # 动态安装浏览器
+openpyxl                  # xlsx 文本抽取（兜底 fallback）
+pandas                     # 备选解析引擎
+
+# ── 辅助工具 ─────────────────────────────────────────────
+pypdf==6.9.2               # 附件 PDF 读取
+tqdm==4.67.3               # 长任务进度条
+json-repair==0.44.1       # 损坏 JSON 修复
+regex==2026.2.28           # 加强正则（Unicode / Unicode Script）
+python-dateutil==2.9.0.post0

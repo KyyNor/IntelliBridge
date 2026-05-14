@@ -457,7 +457,8 @@ def hindsight_recall(
     headers: dict = CurrentHeaders(),
 ) -> str:
     """
-    检索记忆，当遇到未接触过的名词、不清楚的概念时应当优先检索记忆。
+    记忆召回，从记忆中查找相关内容。
+    当你遇到任何不了解的事情的时候，都应当先做一次记忆召回。
 
     Args:
         query: 查询条件
