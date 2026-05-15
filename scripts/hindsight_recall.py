@@ -10,8 +10,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.response
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 import getpass
 
 HINDSIGHT_URL = "http://125.102.1.12:58888"
@@ -66,12 +65,19 @@ class HindsightRecall:
 
 def main():
     parser = argparse.ArgumentParser(description="Hindsight 轻量级召回")
-    parser.add_argument("query", nargs="+", help="查询内容（支持多词拼接）")
+    parser.add_argument("query", nargs="*", help="查询内容（留空则从 stdin 读取）")
     parser.add_argument("--tokens", type=int, default=512, help="最大 token 数 (default: 512)")
     parser.add_argument("--budget", default="mid", choices=["low", "mid", "high"], help="预算级别")
     args = parser.parse_args()
 
-    query = " ".join(args.query)
+    if args.query:
+        query = " ".join(args.query)
+    else:
+        query = sys.stdin.read().strip()
+
+    if not query:
+        print("错误: 请传入查询内容，或通过管道输入", file=sys.stderr)
+        sys.exit(1)
     bank_id = getpass.getuser()
 
     client = HindsightRecall()
