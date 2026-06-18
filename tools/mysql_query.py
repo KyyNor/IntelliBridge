@@ -43,7 +43,7 @@ class MySQLQuery:
     """MySQL 查询工具类"""
 
     # 最大返回行数
-    MAX_LIMIT = 1000
+    MAX_LIMIT = 10000
 
     # 默认返回行数
     DEFAULT_LIMIT = 10
