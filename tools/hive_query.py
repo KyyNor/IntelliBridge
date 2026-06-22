@@ -87,7 +87,7 @@ class HiveQuery:
 
     def _normalize_sql(self, sql: str) -> str:
         """
-        标准化 SQL：移除注释、转大写并格式化
+        标准化 SQL：移除注释并格式化（保持原有大小写，字符串常量不受影响）
 
         Args:
             sql: 原始 SQL 语句
@@ -99,14 +99,12 @@ class HiveQuery:
         sql_no_comment = remove_comments(sql)
 
         try:
-            # 使用 sqlglot 格式化 SQL
-            formatted = sqlglot.parse_one(sql_no_comment, dialect='hive').sql(dialect='hive')
-            # 转大写
-            normalized = formatted.upper()
+            # 使用 sqlglot 格式化 SQL（保留大小写，只修正语法格式）
+            normalized = sqlglot.parse_one(sql_no_comment, dialect='hive').sql(dialect='hive')
             return normalized
         except Exception as e:
             logger.warning(f"SQL 格式化失败，使用原始 SQL: {e}")
-            return sql_no_comment.upper()
+            return sql_no_comment
 
     def _get_sql_hash(self, sql: str) -> str:
         """
