@@ -52,51 +52,42 @@ class MySQLQuery:
         """初始化查询工具"""
         pass
 
-    def list_databases(self, as_json: bool = False):
+    def list_databases(self) -> dict:
         """
         列出所有可用的数据库
 
-        Args:
-            as_json: 是否返回 JSON 格式，默认 False 返回 CSV 格式
-
         Returns:
-            CSV 格式（默认）或 JSON 格式的数据库列表
+            Dict 格式的数据库列表
         """
         try:
             # 从连接池获取数据库列表
             databases = mysql_pool.get_database_list()
 
             if not databases:
-                return "错误: 没有可用的数据库" if not as_json else json.dumps({"error": "没有可用的数据库"}, ensure_ascii=False)
+                return {"error": "没有可用的数据库"}
 
             # 第一行是标题，跳过
             db_lines = databases[1:] if databases else []
 
-            if as_json:
-                # 返回 JSON 格式
-                db_list = []
-                for line in db_lines:
-                    parts = line.split(",", 1)
-                    if len(parts) == 2:
-                        db_list.append({"database": parts[0], "description": parts[1]})
-                    elif parts:
-                        db_list.append({"database": parts[0], "description": ""})
+            # 解析并返回 dict 格式
+            db_list = []
+            for line in db_lines:
+                parts = line.split(",", 1)
+                if len(parts) == 2:
+                    db_list.append({"database": parts[0], "description": parts[1]})
+                elif parts:
+                    db_list.append({"database": parts[0], "description": ""})
 
-                result = {"databases": db_list, "total": len(db_list)}
-                logger.info(f"获取数据库列表成功: {len(db_list)} 个数据库")
-                return json.dumps(result, ensure_ascii=False, indent=2)
-
-            # 返回 CSV 格式
-            logger.info(f"获取数据库列表成功: {len(db_lines)} 个数据库")
-            return '\n'.join(databases)
+            logger.info(f"获取数据库列表成功: {len(db_list)} 个数据库")
+            return {"databases": db_list, "total": len(db_list)}
 
         except Exception as e:
             error_msg = f"获取数据库列表失败: {str(e)}"
             detail = traceback.format_exc()
             logger.error(f"{error_msg}\n{detail}")
-            return error_msg
+            return {"error": error_msg}
 
-    def search_tables(self, database: str, keyword: str = "") -> str:
+    def search_tables(self, database: str, keyword: str = "") -> dict:
         """
         搜索数据库中的表（支持模糊匹配表名和表注释）
 
@@ -105,13 +96,13 @@ class MySQLQuery:
             keyword: 搜索关键字（可选）
 
         Returns:
-            CSV 格式的表列表（表名,表注释）
+            Dict 格式的表列表
         """
         try:
             # 验证数据库是否存在
             node = mysql_pool.get_node_by_database(database)
             if not node:
-                return f"错误: 数据库不存在: {database}"
+                return {"error": f"数据库不存在: {database}"}
 
             cache_key = f"mysql:tables:{database}:{keyword}"
 
@@ -152,38 +143,30 @@ class MySQLQuery:
                 results = cursor.fetchall()
 
             if not results:
-                return f"数据库 {database} ({actual_db}) 中未找到表"
+                return {"error": f"数据库 {database} 中未找到表"}
 
-            if not results:
-                return f"数据库 {database} 中未找到表"
-
-            # 转换为 CSV 格式
-            output = []
-            output.append("表名,表注释")
+            # 构造 dict 格式
+            tables = []
             for row in results:
-                table_name = row['TABLE_NAME'] if row['TABLE_NAME'] else ""
-                table_comment = row['TABLE_COMMENT'] if row.get('TABLE_COMMENT') else ""
-                # 处理注释中的逗号
-                if "," in table_comment:
-                    table_comment = f'"{table_comment}"'
-                output.append(f"{table_name},{table_comment}")
-
-            result = "\n".join(output)
+                tables.append({
+                    "table_name": row['TABLE_NAME'] if row['TABLE_NAME'] else "",
+                    "table_comment": row['TABLE_COMMENT'] if row.get('TABLE_COMMENT') else ""
+                })
 
             # 缓存10分钟
-            cache.set(cache_key, result, expire=600)
+            cache.set(cache_key, {"tables": tables, "total": len(tables)}, expire=600)
 
             logger.info(f"搜索表成功: {database}, 找到 {len(results)} 个表")
-            return result
+            return {"tables": tables, "total": len(tables)}
 
         except Exception as e:
             error_msg = f"搜索表失败: {str(e)}"
             detail = traceback.format_exc()
             logger.error(f"{error_msg}\n{detail}")
-            return error_msg
+            return {"error": error_msg}
 
 
-    def describe_table(self, database: str, table_name: str) -> str:
+    def describe_table(self, database: str, table_name: str) -> dict:
         """
         查询表结构
 
@@ -192,15 +175,14 @@ class MySQLQuery:
             table_name: 表名
 
         Returns:
-            CSV 格式的表结构数据
+            Dict 格式的表结构数据
         """
         try:
             # 验证数据库是否存在
             node = mysql_pool.get_node_by_database(database)
             if not node:
-                # 返回可用数据库列表
                 available_dbs = self.list_databases()
-                return f"错误: 数据库不存在: {database}\n\n可用数据库:\n{available_dbs}"
+                return {"error": f"数据库不存在: {database}", "available_databases": available_dbs}
 
             cache_key = f"mysql:describe:{database}:{table_name}"
 
@@ -233,28 +215,21 @@ class MySQLQuery:
                 results = cursor.fetchall()
 
             if not results:
-                return f"错误: 表 {database} ({actual_db}).{table_name} 不存在或无数据"
+                return {"error": f"表 {database} ({actual_db}).{table_name} 不存在或无数据"}
 
-            # 转换为 CSV 格式
-            output = []
-            output.append("字段名,类型,是否可空,键,默认值,注释")
+            # 构造 dict 格式
+            columns = []
             for row in results:
-                col_name = row['COLUMN_NAME'] if row['COLUMN_NAME'] else ""
-                col_type = row['COLUMN_TYPE'] if row['COLUMN_TYPE'] else ""
-                is_nullable = row['IS_NULLABLE'] if row['IS_NULLABLE'] else ""
-                col_key = row['COLUMN_KEY'] if row.get('COLUMN_KEY') else ""
-                col_default = str(row['COLUMN_DEFAULT']) if row.get('COLUMN_DEFAULT') is not None else ""
-                col_comment = row['COLUMN_COMMENT'] if row.get('COLUMN_COMMENT') else ""
+                columns.append({
+                    "column_name": row['COLUMN_NAME'] if row['COLUMN_NAME'] else "",
+                    "column_type": row['COLUMN_TYPE'] if row['COLUMN_TYPE'] else "",
+                    "nullable": row['IS_NULLABLE'] if row['IS_NULLABLE'] else "",
+                    "column_key": row['COLUMN_KEY'] if row.get('COLUMN_KEY') else "",
+                    "column_default": str(row['COLUMN_DEFAULT']) if row.get('COLUMN_DEFAULT') is not None else "",
+                    "column_comment": row['COLUMN_COMMENT'] if row.get('COLUMN_COMMENT') else ""
+                })
 
-                # 处理包含逗号的字段
-                if "," in col_comment:
-                    col_comment = f'"{col_comment}"'
-                if "," in col_default:
-                    col_default = f'"{col_default}"'
-
-                output.append(f"{col_name},{col_type},{is_nullable},{col_key},{col_default},{col_comment}")
-
-            result = "\n".join(output)
+            result = {"columns": columns, "total": len(columns)}
 
             # 缓存30分钟
             cache.set(cache_key, result, expire=1800)
@@ -266,11 +241,10 @@ class MySQLQuery:
             error_msg = f"查询表结构失败: {str(e)}"
             detail = traceback.format_exc()
             logger.error(f"{error_msg}\n{detail}")
-            # 返回可用数据库列表
             available_dbs = self.list_databases()
-            return f"{error_msg}\n\n可用数据库:\n{available_dbs}"
+            return {"error": error_msg, "available_databases": available_dbs}
 
-    def query_data(self, database: str, sql: str, limit: int = 10) -> str:
+    def query_data(self, database: str, sql: str, limit: int = 10) -> dict:
         """
         执行查询SQL
 
@@ -280,24 +254,24 @@ class MySQLQuery:
             limit: 返回数据条数，默认10，最多1000
 
         Returns:
-            CSV 格式的查询结果
+            Dict 格式的查询结果
         """
         try:
             # 参数校验
             sql = sql.strip()
             if not sql:
-                return "错误: SQL 语句不能为空"
+                return {"error": "SQL 语句不能为空"}
 
             # 验证数据库是否存在
             node = mysql_pool.get_node_by_database(database)
             if not node:
-                return f"错误: 数据库不存在: {database}"
+                return {"error": f"数据库不存在: {database}"}
 
             # 移除注释并检查 SQL 类型（支持开头注释，排除 INSERT/DELETE/DROP）
             sql_no_comment = remove_comments(sql)
             type_check = check_sql_type(sql_no_comment, allowed_prefixes=['SELECT'], forbidden_keywords=['INSERT', 'DELETE', 'DROP'])
             if type_check != "ok":
-                return type_check
+                return {"error": type_check}
 
             # 限制返回条数
             limit = max(1, min(limit, self.MAX_LIMIT))
@@ -320,36 +294,27 @@ class MySQLQuery:
                 # 获取结果
                 results = cursor.fetchall()
                 if not results:
-                    return "查询结果为空"
+                    return {"error": "查询结果为空"}
 
                 # 获取列名
                 columns = [desc[0] for desc in cursor.description]
 
-                # 转换为 CSV 格式
-                output = []
-                output.append(",".join(columns))
+                # 构造 dict 格式
+                rows = []
                 for row in results:
-                    # 处理 None 值和包含逗号的字段
-                    row_str = []
-                    for item in row.values():  # 字典需要用 .values() 获取值
-                        if item is None:
-                            row_str.append("")
-                        elif isinstance(item, str) and ("," in item or "\n" in item):
-                            row_str.append(f'"{item}"')
-                        else:
-                            row_str.append(str(item))
-                    output.append(",".join(row_str))
+                    row_dict = {}
+                    for key in row.keys():
+                        row_dict[key] = row[key]
+                    rows.append(row_dict)
 
-                result = "\n".join(output)
-
-            logger.info(f"查询成功，返回 {len(results)} 条数据")
-            return result
+                logger.info(f"查询成功，返回 {len(results)} 条数据")
+                return {"rows": rows, "columns": columns, "total": len(rows)}
 
         except Exception as e:
             error_msg = f"查询失败: {str(e)}"
             detail = traceback.format_exc()
             logger.error(f"{error_msg}\n{detail}")
-            return error_msg
+            return {"error": error_msg}
 
     def _normalize_sql(self, sql: str) -> str:
         """
@@ -420,173 +385,29 @@ async def query_mysql_data(request: QueryRequest):
 
 # ==================== MCP 工具 ====================
 
-def _csv_to_dict(csv_text: str) -> dict:
-    """
-    将 CSV 格式的文本转换为 dict
-
-    Args:
-        csv_text: CSV 格式的文本
-
-    Returns:
-        包含解析结果的 dict，如果是错误信息则返回 {"error": msg}
-    """
-    if isinstance(csv_text, dict):
-        return csv_text
-
-    lines = csv_text.strip().split('\n') if csv_text else []
-
-    # 检查是否是错误信息
-    if lines and (lines[0].startswith('错误:') or lines[0].startswith('搜索表失败') or
-                  lines[0].startswith('查询表结构失败') or lines[0].startswith('获取数据库列表失败')):
-        return {"error": csv_text}
-
-    # 检查是否有标题行
-    if lines and ',' in lines[0]:
-        headers = [h.strip() for h in lines[0].split(',')]
-
-        # 根据不同场景构建不同的返回结构
-        if headers == ['字段名', '类型', '是否可空', '键', '默认值', '注释']:
-            # describe_table 结果
-            columns = []
-            for line in lines[1:]:
-                if line.strip():
-                    values = _safe_csv_split(line)
-                    if len(values) == len(headers):
-                        columns.append(dict(zip(headers, values)))
-            return {
-                "columns": columns,
-                "total": len(columns)
-            }
-        elif headers == ['表名', '表注释']:
-            # search_tables 结果
-            tables = []
-            for line in lines[1:]:
-                if line.strip():
-                    values = _safe_csv_split(line)
-                    if len(values) == len(headers):
-                        tables.append(dict(zip(headers, values)))
-            return {
-                "tables": tables,
-                "total": len(tables)
-            }
-        elif headers == ['database_name', 'table_num']:
-            # list_databases 结果
-            databases = []
-            for line in lines[1:]:
-                if line.strip():
-                    values = _safe_csv_split(line)
-                    if len(values) == len(headers):
-                        databases.append(dict(zip(headers, values)))
-            return {
-                "databases": databases,
-                "total": len(databases)
-            }
-        else:
-            # 通用 CSV 解析
-            rows = []
-            for line in lines[1:]:
-                if line.strip():
-                    values = _safe_csv_split(line)
-                    if len(values) == len(headers):
-                        rows.append(dict(zip(headers, values)))
-            return {
-                "rows": rows,
-                "columns": headers,
-                "total": len(rows)
-            }
-
-    return {"raw": csv_text}
-
-
-def _safe_csv_split(line: str) -> list:
-    """安全拆分CSV行，处理引号包裹的逗号"""
-    result = []
-    current = []
-    in_quotes = False
-
-    i = 0
-    while i < len(line):
-        char = line[i]
-        if char == '"':
-            # 处理双引号转义
-            if in_quotes and i + 1 < len(line) and line[i + 1] == '"':
-                current.append('"')
-                i += 1
-            else:
-                in_quotes = not in_quotes
-        elif char == ',' and not in_quotes:
-            result.append(''.join(current).strip())
-            current = []
-        else:
-            current.append(char)
-        i += 1
-
-    result.append(''.join(current).strip())
-    return result
-
-
 @mysql_mcp.tool(name="list_databases")
 @log_function_info
 def mysql_list_databases() -> dict:
-    """
-    列出所有可用的MySQL数据库
-
-    返回 Dict 格式的数据库列表（database, description）
-
-    Returns:
-        Dict 格式的数据库列表
-    """
-    result = mysql_query.list_databases()
-    return _csv_to_dict(result)
+    """列出所有可用的MySQL数据库"""
+    return mysql_query.list_databases()
 
 
 @mysql_mcp.tool(name="search_tables")
 @log_function_info
 def mysql_search_tables(database: str, keyword: str = "") -> dict:
-    """
-    搜索MySQL数据库中的表
-
-    Args:
-        database: 数据库唯一标识符（如 nodeA_whjcbb）
-        keyword: 搜索关键字（可选），支持模糊匹配表名和表注释
-
-    Returns:
-        Dict 格式的表列表（tables 数组和 total 计数）
-    """
-    result = mysql_query.search_tables(database, keyword)
-    return _csv_to_dict(result)
+    """搜索MySQL数据库中的表，支持模糊匹配表名和表注释"""
+    return mysql_query.search_tables(database, keyword)
 
 
 @mysql_mcp.tool(name="describe")
 @log_function_info
 def mysql_describe(database: str, table_name: str) -> dict:
-    """
-    查询MySQL表结构
-
-    Args:
-        database: 数据库唯一标识符（如 nodeA_whjcbb）
-        table_name: 表名
-
-    Returns:
-        Dict 格式的表结构数据（columns 数组和 total 计数）
-    """
-    result = mysql_query.describe_table(database, table_name)
-    return _csv_to_dict(result)
+    """查询MySQL表结构"""
+    return mysql_query.describe_table(database, table_name)
 
 
 @mysql_mcp.tool(name="query")
 @log_function_info
 def mysql_query_tool(database: str, sql: str, limit: int = 10) -> dict:
-    """
-    执行MySQL查询SQL
-
-    Args:
-        database: 数据库唯一标识符（如 nodeA_whjcbb）
-        sql: 查询 SQL 语句（仅允许 SELECT）
-        limit: 返回数据条数，默认10，最多1000
-
-    Returns:
-        Dict 格式的查询结果（rows 数组、columns 列名和 total 总数）
-    """
-    result = mysql_query.query_data(database, sql, limit)
-    return _csv_to_dict(result)
+    """执行MySQL查询SQL"""
+    return mysql_query.query_data(database, sql, limit)

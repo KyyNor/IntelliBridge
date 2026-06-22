@@ -118,7 +118,7 @@ class HiveQuery:
         """
         return hashlib.md5(sql.encode('utf-8')).hexdigest()
 
-    def _describe_table_impl(self, table_full_name: str) -> str:
+    def _describe_table_impl(self, table_full_name: str) -> dict:
         """
         查看表结构的具体实现（不带缓存和锁，供内部调用）
 
@@ -126,22 +126,23 @@ class HiveQuery:
             table_full_name: 表名，格式为 "库名.表名"
 
         Returns:
-            CSV 格式的表结构数据
+            Dict 格式的表结构数据
         """
         try:
             # 解析库名和表名
             if "." not in table_full_name:
-                # 返回可用数据库列表供用户参考
                 available_dbs = self.list_databases()
-                return f"错误: 表名格式不正确，应为 '库名.表名'\n\n可用数据库:\n{available_dbs}"
+                return {"error": "表名格式不正确，应为 '库名.表名'", "available_databases": available_dbs}
 
             database, table = table_full_name.strip().split(".", 1)
 
             # 先检查数据库是否存在
             available_dbs = self.list_databases()
-            db_list = [line.split(",")[0] for line in available_dbs.split("\n")[1:] if line]
-            if database not in db_list:
-                return f"错误: 数据库 '{database}' 不存在\n\n可用数据库:\n{available_dbs}"
+            if "error" in available_dbs:
+                return available_dbs
+            db_names = [db["database_name"] for db in available_dbs["databases"]]
+            if database not in db_names:
+                return {"error": f"数据库 '{database}' 不存在", "available_databases": available_dbs}
 
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -151,30 +152,30 @@ class HiveQuery:
                 results = cursor.fetchall()
 
                 if not results:
-                    return f"错误: 表 {table_full_name} 不存在或无数据"
+                    return {"error": f"表 {table_full_name} 不存在或无数据"}
 
-                # 转换为 CSV 格式
-                output = []
-                output.append("列名,数据类型,注释")
+                # 构造 dict 格式
+                columns = []
                 for row in results:
-                    col_name = row[0] if row[0] else ""
-                    data_type = row[1] if row[1] else ""
-                    comment = row[2] if len(row) > 2 and row[2] else ""
-                    output.append(f"{col_name},{data_type},{comment}")
+                    columns.append({
+                        "column_name": row[0] if row[0] else "",
+                        "data_type": row[1] if row[1] else "",
+                        "comment": row[2] if len(row) > 2 and row[2] else ""
+                    })
 
                 logger.info(f"查询表结构成功: {table_full_name}")
-                return "\n".join(output)
+                return {"database_table": table_full_name, "columns": columns, "total": len(columns)}
+
             finally:
                 cursor.close()
 
         except Exception as e:
             error_msg = f"查询表结构失败: {str(e)}"
             logger.error(f"{error_msg}\n{traceback.format_exc()}")
-            # 也返回可用数据库列表
             available_dbs = self.list_databases()
-            return f"{error_msg}\n\n可用数据库:\n{available_dbs}"
+            return {"error": error_msg, "available_databases": available_dbs}
 
-    def describe_table(self, table_full_name: str) -> str:
+    def describe_table(self, table_full_name: str) -> dict:
         """
         查看表结构
 
@@ -188,7 +189,7 @@ class HiveQuery:
             table_full_name: 表名，格式为 "库名.表名"
 
         Returns:
-            CSV 格式的表结构数据
+            Dict 格式的表结构数据
         """
         # 生成缓存键（与原 decorate 行为一致）
         import hashlib
@@ -217,7 +218,7 @@ class HiveQuery:
 
             return result
 
-    def query_data(self, sql: str, limit: int = 10) -> str:
+    def query_data(self, sql: str, limit: int = 10) -> dict:
         """
         查询数据
 
@@ -226,13 +227,13 @@ class HiveQuery:
             limit: 返回数据条数，默认10，最多1000
 
         Returns:
-            CSV 格式的查询结果
+            Dict 格式的查询结果
         """
         try:
             # 参数校验
             original_sql = sql.strip()
             if not original_sql:
-                return "错误: SQL 语句不能为空"
+                return {"error": "SQL 语句不能为空"}
 
             # 移除注释（用于检查SQL类型）
             sql_no_comment = remove_comments(original_sql)
@@ -240,7 +241,7 @@ class HiveQuery:
             # 检查 SQL 类型（是否允许执行）
             type_check_result = check_sql_type(sql_no_comment, allowed_prefixes=['SELECT', 'WITH', 'REFRESH'], forbidden_keywords=['INSERT', 'DELETE', 'DROP'])
             if type_check_result != "ok":
-                return type_check_result
+                return {"error": type_check_result}
 
             # 限制返回条数
             limit = max(1, min(limit, 1000))
@@ -251,7 +252,7 @@ class HiveQuery:
             # 检查表名和过滤条件（使用移除注释后的 SQL）
             filter_check_result = self._check_sql_filter(sql_no_comment)
             if filter_check_result != "ok":
-                return filter_check_result
+                return {"error": filter_check_result}
 
             # 添加 LIMIT 限制到标准化 SQL
             final_sql = normalized_sql
@@ -268,38 +269,32 @@ class HiveQuery:
                 # 获取结果
                 results = cursor.fetchall()
                 if not results:
-                    return "查询结果为空,请检查筛选条件后重试(数据日期格式为yyyy-MM-dd)"
+                    return {"error": "查询结果为空,请检查筛选条件后重试(数据日期格式为yyyy-MM-dd)"}
 
                 # 获取列名
                 columns = [desc[0] for desc in cursor.description]
 
-                # 转换为 CSV 格式
-                output = []
-                output.append(",".join(columns))
+                # 构造 dict 格式
+                rows = []
                 for row in results:
-                    # 处理 None 值和包含逗号的字段
-                    row_str = []
-                    for item in row:
+                    row_dict = {}
+                    for i, item in enumerate(row):
                         if item is None:
-                            row_str.append("")
-                        elif isinstance(item, str) and ("," in item or "\n" in item):
-                            # 如果包含逗号或换行，用引号包裹
-                            row_str.append(f'"{item}"')
+                            row_dict[columns[i]] = None
                         else:
-                            row_str.append(str(item))
-                    output.append(",".join(row_str))
-
-                result = "\n".join(output)
+                            row_dict[columns[i]] = item
+                    rows.append(row_dict)
 
                 logger.info(f"查询成功，返回 {len(results)} 条数据")
-                return result
+                return {"rows": rows, "columns": columns, "total": len(rows)}
+
             finally:
                 cursor.close()
 
         except Exception as e:
             error_msg = f"查询失败: {str(e)}"
             logger.error(f"{error_msg}\n{traceback.format_exc()}")
-            return error_msg
+            return {"error": error_msg}
 
     def _check_sql_filter(self, sql: str) -> str:
         """
@@ -339,7 +334,7 @@ class HiveQuery:
 
         return "ok"
 
-    def list_databases(self, extra_blacklist: Optional[List[str]] = None) -> str:
+    def list_databases(self, extra_blacklist: Optional[List[str]] = None) -> dict:
         """
         列出所有 Hive 数据库及表数量
 
@@ -347,7 +342,7 @@ class HiveQuery:
             extra_blacklist: 额外的黑名单列表
 
         Returns:
-            CSV 格式：database_name,table_num
+            Dict 格式：databases 列表和 total 总数
         """
         # 合并黑名单：配置文件的 + 传入的
         blacklist = set(self._database_blacklist)
@@ -369,21 +364,18 @@ class HiveQuery:
 
                 # 过滤黑名单
                 filtered_results = [
-                    r for r in results
+                    {"database_name": r['db_name'], "table_num": r['table_num']}
+                    for r in results
                     if r['db_name'] not in blacklist
                 ]
 
-                # 转换为 CSV
-                output = ["database_name,table_num"]
-                for row in filtered_results:
-                    output.append(f"{row['db_name']},{row['table_num']}")
-
                 logger.info(f"列出数据库成功，共 {len(filtered_results)} 个")
-                return "\n".join(output)
+                return {"databases": filtered_results, "total": len(filtered_results)}
+
         except Exception as e:
             error_msg = f"列出数据库失败: {str(e)}"
             logger.error(f"{error_msg}\n{traceback.format_exc()}")
-            return error_msg
+            return {"error": error_msg}
 
     def _refresh_database_table_cache(self, database: str) -> List[dict]:
         """
@@ -413,7 +405,7 @@ class HiveQuery:
             logger.error(f"刷新表清单缓存失败: {database}, {e}\n{traceback.format_exc()}")
             return []
 
-    def list_tables(self, database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> str:
+    def list_tables(self, database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> dict:
         """
         列出指定数据库的表
 
@@ -424,7 +416,7 @@ class HiveQuery:
             page_size: 每页数量，最大50
 
         Returns:
-            JSON 格式，含分页信息和表列表
+            Dict 格式，含分页信息和表列表
         """
         # 限制 page_size 最大为 50
         page_size = min(page_size, 50)
@@ -464,11 +456,11 @@ class HiveQuery:
             }
 
             logger.info(f"列出表成功: {database}, 共 {total} 张表（缓存命中）")
-            return json.dumps(result, ensure_ascii=False, indent=2)
+            return result
         except Exception as e:
             error_msg = f"列出表失败: {str(e)}"
             logger.error(f"{error_msg}\n{traceback.format_exc()}")
-            return error_msg
+            return {"error": error_msg}
 
     def close(self):
         """关闭连接（委托给连接池）"""
@@ -517,167 +509,31 @@ async def list_tables(request: ListTableRequest):
     return {"data": result}
 
 
-def _csv_split(line: str) -> list:
-    """安全拆分CSV行，处理引号包裹的逗号"""
-    result = []
-    current = []
-    in_quotes = False
+# ==================== MCP 工具 ====================
 
-    for char in line:
-        if char == '"':
-            in_quotes = not in_quotes
-        elif char == ',' and not in_quotes:
-            result.append(''.join(current).strip())
-            current = []
-        else:
-            current.append(char)
-
-    result.append(''.join(current).strip())
-    return result
-
-
-# MCP 工具
 @hive_mcp.tool(name="describe")
 @log_function_info
 def hive_describe(table_name: str) -> dict:
-    """
-    查看 Hive 表结构
-
-    Args:
-        table_name: 表名，格式为 "库名.表名"
-
-    Returns:
-        Dict 格式的表结构数据，包含 columns 列表和 total 计数
-    """
-    result = hive_query.describe_table(table_name)
-
-    # 将 CSV 格式转换为 dict
-    if isinstance(result, str):
-        lines = result.strip().split('\n')
-
-        # 检查是否是错误信息
-        if lines[0].startswith('错误:'):
-            return {"error": result}
-
-        # 检查是否有标题行
-        if lines and ',' in lines[0]:
-            headers = [h.strip() for h in lines[0].split(',')]
-            columns = []
-            for line in lines[1:]:
-                if line.strip():
-                    values = _csv_split(line)
-                    if len(values) == len(headers):
-                        columns.append(dict(zip(headers, values)))
-            return {
-                "columns": columns,
-                "total": len(columns),
-                "database_table": table_name
-            }
-
-    return {"raw": result}
+    """查看 Hive 表结构"""
+    return hive_query.describe_table(table_name)
 
 
 @hive_mcp.tool(name="query")
 @log_function_info
 def hive_query_tool(sql: str, limit: int = 10) -> dict:
-    """
-    查询 Hive 数据，允许执行SELECT、WITH开头的查询语句，或REFRESH 开头的刷新语句
-
-    Args:
-        sql: 查询 SQL 语句
-        limit: 返回数据条数，默认10，最多1000
-
-    Returns:
-        Dict 格式的查询结果，包含 rows 列表、columns 列名和 total 总数
-    """
-    result = hive_query.query_data(sql, limit)
-
-    # 将 CSV 格式转换为 dict
-    if isinstance(result, str):
-        lines = result.strip().split('\n')
-
-        # 检查是否是错误信息或空结果提示
-        if lines[0].startswith('错误:') or '为空' in lines[0] or '请检查' in lines[0]:
-            return {"error": result}
-
-        # 检查是否有标题行
-        if lines and ',' in lines[0]:
-            headers = [h.strip() for h in lines[0].split(',')]
-            rows = []
-            for line in lines[1:]:
-                if line.strip():
-                    values = _csv_split(line)
-                    if len(values) == len(headers):
-                        rows.append(dict(zip(headers, values)))
-
-            return {
-                "rows": rows,
-                "columns": headers,
-                "total": len(rows)
-            }
-
-    return {"raw": result}
+    """查询 Hive 数据"""
+    return hive_query.query_data(sql, limit)
 
 
 @hive_mcp.tool(name="list_databases")
 @log_function_info
 def hive_list_databases() -> dict:
-    """
-    列出所有 Hive 数据库及表数量，支持黑名单过滤
-
-    Returns:
-        Dict 格式：包含 databases 列表和 total 总数
-    """
-    result = hive_query.list_databases()
-
-    # 将 CSV 格式转换为 dict
-    if isinstance(result, str):
-        lines = result.strip().split('\n')
-
-        # 检查是否是错误信息
-        if lines and lines[0].startswith('错误:'):
-            return {"error": result}
-
-        # 检查是否有标题行
-        if lines and ',' in lines[0]:
-            headers = [h.strip() for h in lines[0].split(',')]
-            databases = []
-            for line in lines[1:]:
-                if line.strip():
-                    values = _csv_split(line)
-                    if len(values) == len(headers):
-                        databases.append(dict(zip(headers, values)))
-
-            return {
-                "databases": databases,
-                "total": len(databases)
-            }
-
-    return {"raw": result}
+    """列出所有 Hive 数据库及表数量"""
+    return hive_query.list_databases()
 
 
 @hive_mcp.tool(name="list_tables")
 @log_function_info
 def hive_list_tables(database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> dict:
-    """
-    列出指定数据库的表，支持模糊搜索和分页
-
-    Args:
-        database: 数据库名称
-        table_name: 模糊搜索的表名（忽略大小写）
-        page: 页码，从1开始
-        page_size: 每页数量，默认50，最大50
-
-    Returns:
-        Dict 格式，含分页信息和表列表
-    """
-    result = hive_query.list_tables(database, table_name, page, page_size)
-
-    # 底层已经返回 JSON 字符串，解析为 dict
-    if isinstance(result, str):
-        try:
-            return json.loads(result)
-        except (json.JSONDecodeError, ValueError):
-            return {"error": result, "raw": result}
-
-    return result
+    """列出指定数据库的表，支持模糊搜索和分页"""
+    return hive_query.list_tables(database, table_name, page, page_size)
