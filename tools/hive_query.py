@@ -6,6 +6,7 @@ import traceback
 import sqlglot
 import json
 import yaml
+import threading
 from pathlib import Path
 from typing import Optional, List, Tuple
 from fastapi import APIRouter
@@ -24,6 +25,10 @@ hive_mcp = FastMCP("IntelliBridge Hive")
 
 # 创建路由
 router = APIRouter(prefix="/api/hive", tags=["Hive"])
+
+# 用于串行化 describe_table 操作的全局锁
+# 由于 MCP 工具可能被多个 agent 并发调用，需要确保一次只有一个人能查 hive 表结构
+_describe_lock = threading.RLock()
 
 # 请求模型
 class DescribeRequest(BaseModel):
@@ -115,10 +120,9 @@ class HiveQuery:
         """
         return hashlib.md5(sql.encode('utf-8')).hexdigest()
 
-    @cache.cache_it(expire=1800)
-    def describe_table(self, table_full_name: str) -> str:
+    def _describe_table_impl(self, table_full_name: str) -> str:
         """
-        查看表结构
+        查看表结构的具体实现（不带缓存和锁，供内部调用）
 
         Args:
             table_full_name: 表名，格式为 "库名.表名"
@@ -171,6 +175,49 @@ class HiveQuery:
             # 也返回可用数据库列表
             available_dbs = self.list_databases()
             return f"{error_msg}\n\n可用数据库:\n{available_dbs}"
+
+    def describe_table(self, table_full_name: str) -> str:
+        """
+        查看表结构
+
+        【并发控制说明】
+        为了避免多个 agent 同时查询 hive 表结构导致后台压力过大，
+        这里实现了以下机制：
+        1. 全局锁：整个进程内同一时刻只有一个请求能执行真实的 hive 查询
+        2. 60分钟缓存：有缓存时直接返回，无需抢锁
+
+        Args:
+            table_full_name: 表名，格式为 "库名.表名"
+
+        Returns:
+            CSV 格式的表结构数据
+        """
+        # 生成缓存键（与原 decorate 行为一致）
+        import hashlib
+        params_str = f"describe_table('{table_full_name}',)"
+        cache_key = f"describe_table:{hashlib.md5(params_str.encode()).hexdigest()}"
+
+        # 第一层：检查缓存，如有缓存直接返回（无需拿锁，快速路径）
+        cached_value = cache.get(cache_key)
+        if cached_value is not None:
+            logger.debug(f"describe_table 缓存命中: {table_full_name}")
+            return cached_value
+
+        # 第二层：无缓存时，获取全局锁串行化查询
+        with _describe_lock:
+            # 双重检查：拿到锁后再查一遍，可能在等待锁期间已被其他请求写入缓存
+            cached_value = cache.get(cache_key)
+            if cached_value is not None:
+                logger.debug(f"describe_table 缓存命中(持锁重检): {table_full_name}")
+                return cached_value
+
+            # 执行真实查询
+            result = self._describe_table_impl(table_full_name)
+
+            # 写入缓存，有效期 60 分钟
+            cache.set(cache_key, result, expire=3600)
+
+            return result
 
     def query_data(self, sql: str, limit: int = 10) -> str:
         """
