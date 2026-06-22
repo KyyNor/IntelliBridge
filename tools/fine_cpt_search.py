@@ -357,13 +357,27 @@ class FineCptSearch:
             }
             candidate_pks = candidate_pks & pks if candidate_pks else pks
 
-        # 1.2 按显示名过滤
+        # 1.2 按显示名（或路径）过滤
+        # 支持传 CPT 路径（如 "/xxx/aaa.cpt" 或 "aaa.cpt"）或显示名关键词
         if display_name:
             pks = set()
-            dl = display_name.strip().lower()
+            dl = display_name.strip()
+            if not dl:
+                return result_empty(pagination)
+
+            # 1.2.1 先用显示名倒排索引匹配
+            dll = dl.lower()
             for key, pk_list in self._index_by_display_name.items():
-                if dl in key:
+                if dll in key:
                     pks.update(pk_list)
+
+            # 1.2.2 再用路径全文扫描匹配（支持完整路径、前缀、文件名）
+            for pk, obj in self._cache.items():
+                if self._match_pk(pk, dl):
+                    pks.add(pk)
+                elif obj.full_template_path and self._match_pk(obj.full_template_path, dl):
+                    pks.add(pk)
+
             candidate_pks = candidate_pks & pks if candidate_pks else pks
 
         # 1.3 按来源表过滤 -> 需要跨索引，且结果应当和前面条件AND
@@ -558,9 +572,13 @@ def cpt_search(
     page_size: int = 20,
 ) -> str:
     """
-    按报表名称检索 CPT 文件及其血缘信息。
+    按报表名称或路径检索 CPT 文件及其血缘信息。
 
-    通过报表显示名关键词模糊匹配，返回所有命中的 CPT 文件基本信息及完整血缘关系。
+    支持两种查询方式：
+    - 传显示名关键词（如 "存款利率"）：在报表显示名中模糊搜索
+    - 传 CPT 路径（如 "/a/b/report.cpt" 或 "report.cpt"）：精确或前缀匹配文件路径
+
+    返回所有命中的 CPT 文件基本信息及完整血缘关系。
 
     Args:
         name:  查询关键词（必填，区分大小写，支持空格分词多词匹配）
