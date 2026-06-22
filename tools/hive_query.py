@@ -517,10 +517,29 @@ async def list_tables(request: ListTableRequest):
     return {"data": result}
 
 
+def _csv_split(line: str) -> list:
+    """安全拆分CSV行，处理引号包裹的逗号"""
+    result = []
+    current = []
+    in_quotes = False
+
+    for char in line:
+        if char == '"':
+            in_quotes = not in_quotes
+        elif char == ',' and not in_quotes:
+            result.append(''.join(current).strip())
+            current = []
+        else:
+            current.append(char)
+
+    result.append(''.join(current).strip())
+    return result
+
+
 # MCP 工具
 @hive_mcp.tool(name="describe")
 @log_function_info
-def hive_describe(table_name: str) -> str:
+def hive_describe(table_name: str) -> dict:
     """
     查看 Hive 表结构
 
@@ -528,14 +547,39 @@ def hive_describe(table_name: str) -> str:
         table_name: 表名，格式为 "库名.表名"
 
     Returns:
-        CSV 格式的表结构数据
+        Dict 格式的表结构数据，包含 columns 列表和 total 计数
     """
-    return hive_query.describe_table(table_name)
+    result = hive_query.describe_table(table_name)
+
+    # 将 CSV 格式转换为 dict
+    if isinstance(result, str):
+        lines = result.strip().split('\n')
+
+        # 检查是否是错误信息
+        if lines[0].startswith('错误:'):
+            return {"error": result}
+
+        # 检查是否有标题行
+        if lines and ',' in lines[0]:
+            headers = [h.strip() for h in lines[0].split(',')]
+            columns = []
+            for line in lines[1:]:
+                if line.strip():
+                    values = _csv_split(line)
+                    if len(values) == len(headers):
+                        columns.append(dict(zip(headers, values)))
+            return {
+                "columns": columns,
+                "total": len(columns),
+                "database_table": table_name
+            }
+
+    return {"raw": result}
 
 
 @hive_mcp.tool(name="query")
 @log_function_info
-def hive_query_tool(sql: str, limit: int = 10) -> str:
+def hive_query_tool(sql: str, limit: int = 10) -> dict:
     """
     查询 Hive 数据，允许执行SELECT、WITH开头的查询语句，或REFRESH 开头的刷新语句
 
@@ -544,26 +588,77 @@ def hive_query_tool(sql: str, limit: int = 10) -> str:
         limit: 返回数据条数，默认10，最多1000
 
     Returns:
-        CSV 格式的查询结果
+        Dict 格式的查询结果，包含 rows 列表、columns 列名和 total 总数
     """
-    return hive_query.query_data(sql, limit)
+    result = hive_query.query_data(sql, limit)
+
+    # 将 CSV 格式转换为 dict
+    if isinstance(result, str):
+        lines = result.strip().split('\n')
+
+        # 检查是否是错误信息或空结果提示
+        if lines[0].startswith('错误:') or '为空' in lines[0] or '请检查' in lines[0]:
+            return {"error": result}
+
+        # 检查是否有标题行
+        if lines and ',' in lines[0]:
+            headers = [h.strip() for h in lines[0].split(',')]
+            rows = []
+            for line in lines[1:]:
+                if line.strip():
+                    values = _csv_split(line)
+                    if len(values) == len(headers):
+                        rows.append(dict(zip(headers, values)))
+
+            return {
+                "rows": rows,
+                "columns": headers,
+                "total": len(rows)
+            }
+
+    return {"raw": result}
 
 
 @hive_mcp.tool(name="list_databases")
 @log_function_info
-def hive_list_databases() -> str:
+def hive_list_databases() -> dict:
     """
     列出所有 Hive 数据库及表数量，支持黑名单过滤
 
     Returns:
-        CSV 格式：database_name,table_num
+        Dict 格式：包含 databases 列表和 total 总数
     """
-    return hive_query.list_databases()
+    result = hive_query.list_databases()
+
+    # 将 CSV 格式转换为 dict
+    if isinstance(result, str):
+        lines = result.strip().split('\n')
+
+        # 检查是否是错误信息
+        if lines and lines[0].startswith('错误:'):
+            return {"error": result}
+
+        # 检查是否有标题行
+        if lines and ',' in lines[0]:
+            headers = [h.strip() for h in lines[0].split(',')]
+            databases = []
+            for line in lines[1:]:
+                if line.strip():
+                    values = _csv_split(line)
+                    if len(values) == len(headers):
+                        databases.append(dict(zip(headers, values)))
+
+            return {
+                "databases": databases,
+                "total": len(databases)
+            }
+
+    return {"raw": result}
 
 
 @hive_mcp.tool(name="list_tables")
 @log_function_info
-def hive_list_tables(database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> str:
+def hive_list_tables(database: str, table_name: str = "", page: int = 1, page_size: int = 50) -> dict:
     """
     列出指定数据库的表，支持模糊搜索和分页
 
@@ -574,6 +669,15 @@ def hive_list_tables(database: str, table_name: str = "", page: int = 1, page_si
         page_size: 每页数量，默认50，最大50
 
     Returns:
-        JSON 格式，含分页信息和表列表
+        Dict 格式，含分页信息和表列表
     """
-    return hive_query.list_tables(database, table_name, page, page_size)
+    result = hive_query.list_tables(database, table_name, page, page_size)
+
+    # 底层已经返回 JSON 字符串，解析为 dict
+    if isinstance(result, str):
+        try:
+            return json.loads(result)
+        except (json.JSONDecodeError, ValueError):
+            return {"error": result, "raw": result}
+
+    return result

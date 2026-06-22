@@ -420,23 +420,129 @@ async def query_mysql_data(request: QueryRequest):
 
 # ==================== MCP 工具 ====================
 
+def _csv_to_dict(csv_text: str) -> dict:
+    """
+    将 CSV 格式的文本转换为 dict
+
+    Args:
+        csv_text: CSV 格式的文本
+
+    Returns:
+        包含解析结果的 dict，如果是错误信息则返回 {"error": msg}
+    """
+    if isinstance(csv_text, dict):
+        return csv_text
+
+    lines = csv_text.strip().split('\n') if csv_text else []
+
+    # 检查是否是错误信息
+    if lines and (lines[0].startswith('错误:') or lines[0].startswith('搜索表失败') or
+                  lines[0].startswith('查询表结构失败') or lines[0].startswith('获取数据库列表失败')):
+        return {"error": csv_text}
+
+    # 检查是否有标题行
+    if lines and ',' in lines[0]:
+        headers = [h.strip() for h in lines[0].split(',')]
+
+        # 根据不同场景构建不同的返回结构
+        if headers == ['字段名', '类型', '是否可空', '键', '默认值', '注释']:
+            # describe_table 结果
+            columns = []
+            for line in lines[1:]:
+                if line.strip():
+                    values = _safe_csv_split(line)
+                    if len(values) == len(headers):
+                        columns.append(dict(zip(headers, values)))
+            return {
+                "columns": columns,
+                "total": len(columns)
+            }
+        elif headers == ['表名', '表注释']:
+            # search_tables 结果
+            tables = []
+            for line in lines[1:]:
+                if line.strip():
+                    values = _safe_csv_split(line)
+                    if len(values) == len(headers):
+                        tables.append(dict(zip(headers, values)))
+            return {
+                "tables": tables,
+                "total": len(tables)
+            }
+        elif headers == ['database_name', 'table_num']:
+            # list_databases 结果
+            databases = []
+            for line in lines[1:]:
+                if line.strip():
+                    values = _safe_csv_split(line)
+                    if len(values) == len(headers):
+                        databases.append(dict(zip(headers, values)))
+            return {
+                "databases": databases,
+                "total": len(databases)
+            }
+        else:
+            # 通用 CSV 解析
+            rows = []
+            for line in lines[1:]:
+                if line.strip():
+                    values = _safe_csv_split(line)
+                    if len(values) == len(headers):
+                        rows.append(dict(zip(headers, values)))
+            return {
+                "rows": rows,
+                "columns": headers,
+                "total": len(rows)
+            }
+
+    return {"raw": csv_text}
+
+
+def _safe_csv_split(line: str) -> list:
+    """安全拆分CSV行，处理引号包裹的逗号"""
+    result = []
+    current = []
+    in_quotes = False
+
+    i = 0
+    while i < len(line):
+        char = line[i]
+        if char == '"':
+            # 处理双引号转义
+            if in_quotes and i + 1 < len(line) and line[i + 1] == '"':
+                current.append('"')
+                i += 1
+            else:
+                in_quotes = not in_quotes
+        elif char == ',' and not in_quotes:
+            result.append(''.join(current).strip())
+            current = []
+        else:
+            current.append(char)
+        i += 1
+
+    result.append(''.join(current).strip())
+    return result
+
+
 @mysql_mcp.tool(name="list_databases")
 @log_function_info
-def mysql_list_databases() -> str:
+def mysql_list_databases() -> dict:
     """
     列出所有可用的MySQL数据库
 
-    返回 CSV 格式的数据库列表（数据库标识符,描述）
+    返回 Dict 格式的数据库列表（database, description）
 
     Returns:
-        CSV 格式的数据库列表
+        Dict 格式的数据库列表
     """
-    return mysql_query.list_databases()
+    result = mysql_query.list_databases()
+    return _csv_to_dict(result)
 
 
 @mysql_mcp.tool(name="search_tables")
 @log_function_info
-def mysql_search_tables(database: str, keyword: str = "") -> str:
+def mysql_search_tables(database: str, keyword: str = "") -> dict:
     """
     搜索MySQL数据库中的表
 
@@ -445,14 +551,15 @@ def mysql_search_tables(database: str, keyword: str = "") -> str:
         keyword: 搜索关键字（可选），支持模糊匹配表名和表注释
 
     Returns:
-        CSV 格式的表列表（表名,表注释）
+        Dict 格式的表列表（tables 数组和 total 计数）
     """
-    return mysql_query.search_tables(database, keyword)
+    result = mysql_query.search_tables(database, keyword)
+    return _csv_to_dict(result)
 
 
 @mysql_mcp.tool(name="describe")
 @log_function_info
-def mysql_describe(database: str, table_name: str) -> str:
+def mysql_describe(database: str, table_name: str) -> dict:
     """
     查询MySQL表结构
 
@@ -461,14 +568,15 @@ def mysql_describe(database: str, table_name: str) -> str:
         table_name: 表名
 
     Returns:
-        CSV 格式的表结构数据（字段名,类型,是否可空,键,默认值,注释）
+        Dict 格式的表结构数据（columns 数组和 total 计数）
     """
-    return mysql_query.describe_table(database, table_name)
+    result = mysql_query.describe_table(database, table_name)
+    return _csv_to_dict(result)
 
 
 @mysql_mcp.tool(name="query")
 @log_function_info
-def mysql_query_tool(database: str, sql: str, limit: int = 10) -> str:
+def mysql_query_tool(database: str, sql: str, limit: int = 10) -> dict:
     """
     执行MySQL查询SQL
 
@@ -478,6 +586,7 @@ def mysql_query_tool(database: str, sql: str, limit: int = 10) -> str:
         limit: 返回数据条数，默认10，最多1000
 
     Returns:
-        CSV 格式的查询结果
+        Dict 格式的查询结果（rows 数组、columns 列名和 total 总数）
     """
-    return mysql_query.query_data(database, sql, limit)
+    result = mysql_query.query_data(database, sql, limit)
+    return _csv_to_dict(result)
