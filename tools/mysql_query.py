@@ -24,17 +24,17 @@ router = APIRouter(prefix="/api/mysql", tags=["MySQL"])
 
 # 请求模型
 class SearchTablesRequest(BaseModel):
-    database: str
+    database_id: str
     keyword: Optional[str] = ""
 
 
 class DescribeRequest(BaseModel):
-    database: str
+    database_id: str
     table_name: str
 
 
 class QueryRequest(BaseModel):
-    database: str
+    database_id: str
     sql: str
     limit: Optional[int] = 10
 
@@ -87,12 +87,12 @@ class MySQLQuery:
             logger.error(f"{error_msg}\n{detail}")
             return {"error": error_msg}
 
-    def search_tables(self, database: str, keyword: str = "") -> dict:
+    def search_tables(self, database_id: str, keyword: str = "") -> dict:
         """
         搜索数据库中的表（支持模糊匹配表名和表注释）
 
         Args:
-            database: 数据库唯一标识符（如 nodeA_whjcbb）
+            database_id: 数据库唯一标识符（如 nodeA_whjcbb）
             keyword: 搜索关键字（可选）
 
         Returns:
@@ -100,23 +100,23 @@ class MySQLQuery:
         """
         try:
             # 验证数据库是否存在
-            node = mysql_pool.get_node_by_database(database)
+            node = mysql_pool.get_node_by_database(database_id)
             if not node:
-                return {"error": f"数据库不存在: {database}"}
+                return {"error": f"数据库不存在: {database_id}"}
 
-            cache_key = f"mysql:tables:{database}:{keyword}"
+            cache_key = f"mysql:tables:{database_id}:{keyword}"
 
             # 尝试从缓存获取
             cached_result = cache.get(cache_key)
             if cached_result is not None:
-                logger.info(f"从缓存获取表列表: {database}")
+                logger.info(f"从缓存获取表列表: {database_id}")
                 return cached_result
 
-            with mysql_pool.get_connection(database) as conn:
+            with mysql_pool.get_connection(database_id) as conn:
                 cursor = conn.cursor()
 
                 # 获取实际数据库名用于 SQL 查询
-                actual_db = mysql_pool.get_database_by_unique_id(database)
+                actual_db = mysql_pool.get_database_by_unique_id(database_id)
 
                 # 构建查询SQL
                 if keyword:
@@ -143,7 +143,7 @@ class MySQLQuery:
                 results = cursor.fetchall()
 
             if not results:
-                return {"error": f"数据库 {database} 中未找到表"}
+                return {"error": f"数据库 {database_id} 中未找到表"}
 
             # 构造 dict 格式
             tables = []
@@ -156,7 +156,7 @@ class MySQLQuery:
             # 缓存10分钟
             cache.set(cache_key, {"tables": tables, "total": len(tables)}, expire=600)
 
-            logger.info(f"搜索表成功: {database}, 找到 {len(results)} 个表")
+            logger.info(f"搜索表成功: {database_id}, 找到 {len(results)} 个表")
             return {"tables": tables, "total": len(tables)}
 
         except Exception as e:
@@ -166,12 +166,12 @@ class MySQLQuery:
             return {"error": error_msg}
 
 
-    def describe_table(self, database: str, table_name: str) -> dict:
+    def describe_table(self, database_id: str, table_name: str) -> dict:
         """
         查询表结构
 
         Args:
-            database: 数据库名
+            database_id: 数据库唯一标识符（如 nodeA_whjcbb）
             table_name: 表名
 
         Returns:
@@ -179,24 +179,24 @@ class MySQLQuery:
         """
         try:
             # 验证数据库是否存在
-            node = mysql_pool.get_node_by_database(database)
+            node = mysql_pool.get_node_by_database(database_id)
             if not node:
                 available_dbs = self.list_databases()
-                return {"error": f"数据库不存在: {database}", "available_databases": available_dbs}
+                return {"error": f"数据库不存在: {database_id}", "available_databases": available_dbs}
 
-            cache_key = f"mysql:describe:{database}:{table_name}"
+            cache_key = f"mysql:describe:{database_id}:{table_name}"
 
             # 尝试从缓存获取
             cached_result = cache.get(cache_key)
             if cached_result is not None:
-                logger.info(f"从缓存获取表结构: {database}.{table_name}")
+                logger.info(f"从缓存获取表结构: {database_id}.{table_name}")
                 return cached_result
 
-            with mysql_pool.get_connection(database) as conn:
+            with mysql_pool.get_connection(database_id) as conn:
                 cursor = conn.cursor()
 
                 # 获取实际数据库名用于 SQL 查询
-                actual_db = mysql_pool.get_database_by_unique_id(database)
+                actual_db = mysql_pool.get_database_by_unique_id(database_id)
 
                 # 查询表结构
                 sql = """
@@ -215,7 +215,7 @@ class MySQLQuery:
                 results = cursor.fetchall()
 
             if not results:
-                return {"error": f"表 {database} ({actual_db}).{table_name} 不存在或无数据"}
+                return {"error": f"表 {database_id} ({actual_db}).{table_name} 不存在或无数据"}
 
             # 构造 dict 格式
             columns = []
@@ -234,7 +234,7 @@ class MySQLQuery:
             # 缓存30分钟
             cache.set(cache_key, result, expire=1800)
 
-            logger.info(f"查询表结构成功: {database}.{table_name}")
+            logger.info(f"查询表结构成功: {database_id}.{table_name}")
             return result
 
         except Exception as e:
@@ -244,12 +244,12 @@ class MySQLQuery:
             available_dbs = self.list_databases()
             return {"error": error_msg, "available_databases": available_dbs}
 
-    def query_data(self, database: str, sql: str, limit: int = 10) -> dict:
+    def query_data(self, database_id: str, sql: str, limit: int = 10) -> dict:
         """
         执行查询SQL
 
         Args:
-            database: 数据库唯一标识符（如 nodeA_whjcbb）
+            database_id: 数据库唯一标识符（如 nodeA_whjcbb）
             sql: 查询 SQL 语句
             limit: 返回数据条数，默认10，最多1000
 
@@ -263,9 +263,9 @@ class MySQLQuery:
                 return {"error": "SQL 语句不能为空"}
 
             # 验证数据库是否存在
-            node = mysql_pool.get_node_by_database(database)
+            node = mysql_pool.get_node_by_database(database_id)
             if not node:
-                return {"error": f"数据库不存在: {database}"}
+                return {"error": f"数据库不存在: {database_id}"}
 
             # 移除注释并检查 SQL 类型（支持开头注释，排除 INSERT/DELETE/DROP）
             sql_no_comment = remove_comments(sql)
@@ -285,7 +285,7 @@ class MySQLQuery:
                 final_sql = f"{normalized_sql} LIMIT {limit}"
 
             # 执行查询
-            with mysql_pool.get_connection(database) as conn:
+            with mysql_pool.get_connection(database_id) as conn:
                 cursor = conn.cursor()
 
                 logger.info(f"执行查询: {final_sql}")
@@ -365,21 +365,21 @@ async def list_databases():
 @router.post("/search_tables")
 async def search_tables(request: SearchTablesRequest):
     """搜索数据库中的表"""
-    result = mysql_query.search_tables(request.database, request.keyword)
+    result = mysql_query.search_tables(request.database_id, request.keyword)
     return {"data": result}
 
 
 @router.post("/describe")
 async def describe_table(request: DescribeRequest):
     """查询表结构"""
-    result = mysql_query.describe_table(request.database, request.table_name)
+    result = mysql_query.describe_table(request.database_id, request.table_name)
     return {"data": result}
 
 
 @router.post("/query")
 async def query_mysql_data(request: QueryRequest):
     """执行查询SQL"""
-    result = mysql_query.query_data(request.database, request.sql, request.limit)
+    result = mysql_query.query_data(request.database_id, request.sql, request.limit)
     return {"data": result}
 
 
@@ -394,20 +394,45 @@ def mysql_list_databases() -> dict:
 
 @mysql_mcp.tool(name="search_tables")
 @log_function_info
-def mysql_search_tables(database: str, keyword: str = "") -> dict:
-    """搜索MySQL数据库中的表，支持模糊匹配表名和表注释"""
-    return mysql_query.search_tables(database, keyword)
+def mysql_search_tables(database_id: str, keyword: str = "") -> dict:
+    """搜索MySQL数据库中的表，支持模糊匹配表名和表注释
+
+    Args:
+        database_id: 数据库唯一标识符（如 nodeA_whjcbb）
+        keyword: 搜索关键字（可选）
+
+    Returns:
+        Dict 格式的表列表，包含 tables 数组和 total 总数
+    """
+    return mysql_query.search_tables(database_id, keyword)
 
 
 @mysql_mcp.tool(name="describe")
 @log_function_info
-def mysql_describe(database: str, table_name: str) -> dict:
-    """查询MySQL表结构"""
-    return mysql_query.describe_table(database, table_name)
+def mysql_describe(database_id: str, table_name: str) -> dict:
+    """查询MySQL表的字段结构和属性信息
+
+    Args:
+        database_id: 数据库唯一标识符（如 nodeA_whjcbb）
+        table_name: 要查询的表名
+
+    Returns:
+        Dict 格式的表结构数据，包含 columns 数组（含字段名、类型、可空性、主键等）和 total 总数
+    """
+    return mysql_query.describe_table(database_id, table_name)
 
 
 @mysql_mcp.tool(name="query")
 @log_function_info
-def mysql_query_tool(database: str, sql: str, limit: int = 10) -> dict:
-    """执行MySQL查询SQL"""
-    return mysql_query.query_data(database, sql, limit)
+def mysql_query_tool(database_id: str, sql: str, limit: int = 10) -> dict:
+    """执行MySQL SELECT查询语句并返回结果集
+
+    Args:
+        database_id: 数据库唯一标识符（如 nodeA_whjcbb）
+        sql: SELECT 查询语句
+        limit: 最大返回行数，默认10，上限1000
+
+    Returns:
+        Dict 格式的查询结果，包含 rows 数据行数组、columns 列名数组和 total 行数统计
+    """
+    return mysql_query.query_data(database_id, sql, limit)
