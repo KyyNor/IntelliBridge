@@ -30,6 +30,11 @@ router = APIRouter(prefix="/api/hive", tags=["Hive"])
 # 由于 MCP 工具可能被多个 agent 并发调用，需要确保一次只有一个人能查 hive 表结构
 _describe_lock = threading.RLock()
 
+# ========== query_data 并发控制 ==========
+MAX_CONCURRENT_QUERIES = 2  # 最大并发查询数
+QUERY_WAIT_TIMEOUT = 60     # 等待超时时间（秒）
+_query_semaphore = threading.Semaphore(MAX_CONCURRENT_QUERIES)
+
 # 请求模型
 class DescribeRequest(BaseModel):
     table_name: str
@@ -222,6 +227,10 @@ class HiveQuery:
         """
         查询数据
 
+        【并发控制说明】
+        使用信号量限制最大并发数为 MAX_CONCURRENT_QUERIES，
+        当达到上限时最多等待 QUERY_WAIT_TIMEOUT 秒后返回友好提示。
+
         Args:
             sql: 查询 SQL 语句
             limit: 返回数据条数，默认10，最多1000
@@ -229,6 +238,14 @@ class HiveQuery:
         Returns:
             Dict 格式的查询结果
         """
+        # 获取信号量（最多等待60秒）
+        acquired = _query_semaphore.acquire(timeout=QUERY_WAIT_TIMEOUT)
+        if not acquired:
+            return {
+                "error": f"系统允许最大并发查询量为{MAX_CONCURRENT_QUERIES}，"
+                         f"当前已达到最大并发，等待{QUERY_WAIT_TIMEOUT}秒无释放，请稍后再试。"
+            }
+
         try:
             # 参数校验
             original_sql = sql.strip()
@@ -295,6 +312,8 @@ class HiveQuery:
             error_msg = f"查询失败: {str(e)}"
             logger.error(f"{error_msg}\n{traceback.format_exc()}")
             return {"error": error_msg}
+        finally:
+            _query_semaphore.release()
 
     def _check_sql_filter(self, sql: str) -> str:
         """
