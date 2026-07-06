@@ -4,7 +4,11 @@ from typing import List, Optional
 
 def remove_comments(sql: str) -> str:
     """
-    移除 SQL 中的单行注释 (--)
+    移除 SQL 中的注释
+
+    支持:
+    - 单行注释: -- 注释内容
+    - 多行注释: /* 注释内容 */
 
     Args:
         sql: 原始 SQL 语句
@@ -12,12 +16,18 @@ def remove_comments(sql: str) -> str:
     Returns:
         移除注释后的 SQL 语句
     """
+    # 先移除多行注释 /* ... */
+    sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+
+    # 再移除单行注释 -- ...
     lines = sql.split('\n')
     filtered_lines = []
     for line in lines:
-        # 检测并移除 -- 注释
-        if not line.strip().startswith('--'):
-            filtered_lines.append(line)
+        # 检测并移除 -- 注释（注意 -- 可能出现在字符串里，这里简单处理）
+        stripped = line.strip()
+        if stripped.startswith('--'):
+            continue
+        filtered_lines.append(line)
     return '\n'.join(filtered_lines)
 
 
