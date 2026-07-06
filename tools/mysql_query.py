@@ -267,9 +267,9 @@ class MySQLQuery:
             if not node:
                 return {"error": f"数据库不存在: {database_id}"}
 
-            # 移除注释并检查 SQL 类型（支持开头注释，排除 INSERT/DELETE/DROP）
+            # 移除注释并检查 SQL 类型（支持开头注释和 WITH 子句，排除 INSERT/DELETE/DROP）
             sql_no_comment = remove_comments(sql)
-            type_check = check_sql_type(sql_no_comment, allowed_prefixes=['SELECT'], forbidden_keywords=['INSERT', 'DELETE', 'DROP'])
+            type_check = check_sql_type(sql_no_comment, allowed_prefixes=['SELECT', 'WITH'], forbidden_keywords=['INSERT', 'DELETE', 'DROP'])
             if type_check != "ok":
                 return {"error": type_check}
 
