@@ -7,33 +7,43 @@ from datetime import datetime
 from typing import Callable, Any
 from utils.logger import logger
 from utils.mysql_pool import mysql_pool
+from utils.call_log_writer import BoundedCallLogWriter
+
+
+def _insert_func_call_log(record: dict) -> None:
+    with mysql_pool.get_connection("mysql_121_data_factory") as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(record["sql"], record["params"])
+        conn.commit()
+
+
+_call_log_writer = BoundedCallLogWriter(_insert_func_call_log, max_queue_size=1024)
 
 
 def _save_func_call_log(request_id: str, func_name: str, module: str, params: dict,
                          started_at: datetime, elapsed: int, is_success: bool, error_msg: str = ""):
-    """异步触发函数调用日志入库（fire-and-forget，后台线程执行）"""
+    """异步提交函数调用日志；队列满时丢弃，不能阻塞业务请求。"""
     params_json = json.dumps(params, ensure_ascii=False, default=str)
     started_at_str = started_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    sql = """
+        INSERT INTO llm_func_call_log
+            (request_id, func_name, module, params, started_at, elapsed, is_success, error_msg)
+        VALUES
+            (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    _call_log_writer.submit({
+        "sql": sql,
+        "params": (
+            request_id, func_name, module, params_json,
+            started_at_str, elapsed, 1 if is_success else 0, error_msg,
+        ),
+    })
 
-    def _do_insert():
-        sql = """
-            INSERT INTO llm_func_call_log
-                (request_id, func_name, module, params, started_at, elapsed, is_success, error_msg)
-            VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        try:
-            with mysql_pool.get_connection("mysql_121_data_factory") as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(sql, (
-                        request_id, func_name, module, params_json,
-                        started_at_str, elapsed, 1 if is_success else 0, error_msg,
-                    ))
-                conn.commit()
-        except Exception:
-            logger.exception("[%s] [%s] 函数调用日志写入数据库失败", request_id, func_name)
 
-    threading.Thread(target=_do_insert, daemon=True).start()
+def shutdown_call_log_writer(timeout: float = 5.0) -> None:
+    """Flush and stop the process-wide call-log worker."""
+
+    _call_log_writer.stop(timeout=timeout)
 
 
 def log_function_info(func: Callable) -> Callable:
@@ -113,4 +123,4 @@ def log_function_info(func: Callable) -> Callable:
 #     INDEX idx_request_id(`request_id`),                                                                                                                                                                                       
 #     INDEX idx_func_name(`func_name`),                                                                                                                                                                                         
 #     INDEX idx_started_at(`started_at`)                                                                                                                                                                                        
-#   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='函数调用日志表';                     
+#   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='函数调用日志表';

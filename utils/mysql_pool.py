@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from typing import Optional, Dict, List
+import threading
 
 import pymysql
 from dbutils.pooled_db import PooledDB
@@ -15,6 +16,8 @@ class MySQLConnectionPool:
         """初始化连接池配置"""
         self.nodes_config = self._load_nodes_config()
         self._pools: Dict[str, PooledDB] = {}
+        self._pool_slots: Dict[str, threading.BoundedSemaphore] = {}
+        self._pool_acquire_timeouts: Dict[str, float] = {}
         self._db_to_node_map = self._build_db_to_node_mapping()
         self._init_pools()
 
@@ -57,13 +60,25 @@ class MySQLConnectionPool:
         for node in self.nodes_config:
             node_name = node["name"]
             try:
+                max_connections = max(1, int(node.get('max_connections', 10)))
+                acquire_timeout = float(
+                    node.get(
+                        "pool_acquire_timeout",
+                        config.get("mysql.pool_acquire_timeout", 30.0),
+                    )
+                )
+                if acquire_timeout <= 0:
+                    raise ValueError("pool_acquire_timeout must be greater than zero")
+
                 pool = PooledDB(
                     creator=pymysql,
-                    maxconnections=int(node.get('max_connections', 10)),
+                    maxconnections=max_connections,
                     mincached=int(node.get('min_cached', 0)),
                     maxcached=int(node.get('max_cached', 5)),
                     maxshared=int(node.get('max_shared', 0)),
-                    blocking=True,
+                    # The semaphore below provides the bounded wait. Avoid a
+                    # second indefinite wait inside DBUtils itself.
+                    blocking=False,
                     maxusage=int(node.get('max_usage', 0)),
                     setsession=[],
                     ping=1,
@@ -75,6 +90,8 @@ class MySQLConnectionPool:
                     cursorclass=pymysql.cursors.DictCursor,
                 )
                 self._pools[node_name] = pool
+                self._pool_slots[node_name] = threading.BoundedSemaphore(max_connections)
+                self._pool_acquire_timeouts[node_name] = acquire_timeout
                 logger.info(f"MySQL 连接池初始化成功: {node_name}")
             except Exception as e:
                 logger.error(f"初始化连接池失败 {node_name}: {e}")
@@ -186,7 +203,22 @@ class MySQLConnectionPool:
             raise ValueError(f"连接池不存在: {node['name']}")
 
         logger.info(f"从连接池获取连接: {node['name']}/{actual_db}")
-        conn = pool.connection()
+        slot = self._pool_slots.get(node['name'])
+        if slot is None:
+            raise ValueError(f"连接池并发控制未初始化: {node['name']}")
+
+        acquire_timeout = self._pool_acquire_timeouts.get(node['name'], 30.0)
+        if not slot.acquire(timeout=acquire_timeout):
+            raise TimeoutError(
+                f"获取 MySQL 连接超时: {node['name']}/{actual_db}，"
+                f"等待上限 {acquire_timeout:g} 秒"
+            )
+
+        try:
+            conn = pool.connection()
+        except Exception:
+            slot.release()
+            raise
 
         try:
             # 使用 SQL 语句切换到指定数据库
@@ -194,8 +226,11 @@ class MySQLConnectionPool:
                 cursor.execute(f"USE `{actual_db}`")
             yield conn
         finally:
-            conn.close()  # 归还连接到池
-            logger.info(f"连接已归还到池: {node['name']}/{actual_db}")
+            try:
+                conn.close()  # 归还连接到池
+                logger.info(f"连接已归还到池: {node['name']}/{actual_db}")
+            finally:
+                slot.release()
 
     def close_pool(self, database: str):
         """关闭指定数据库的连接池"""
@@ -206,6 +241,8 @@ class MySQLConnectionPool:
         pool = self._pools.get(node['name'])
         if pool:
             pool.close()
+            self._pool_slots.pop(node['name'], None)
+            self._pool_acquire_timeouts.pop(node['name'], None)
             logger.info(f"MySQL 连接池已关闭: {node['name']}")
 
     def close_all_pools(self):
@@ -217,6 +254,8 @@ class MySQLConnectionPool:
             except Exception as e:
                 logger.warning(f"关闭连接池 {name} 时出错: {e}")
         self._pools.clear()
+        self._pool_slots.clear()
+        self._pool_acquire_timeouts.clear()
         logger.info("所有 MySQL 连接池已关闭")
 
 
