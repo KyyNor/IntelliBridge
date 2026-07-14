@@ -356,28 +356,28 @@ mysql_query = MySQLQuery()
 # ==================== API 路由 ====================
 
 @router.get("/databases")
-async def list_databases():
+def list_databases():
     """列出所有可用的数据库"""
     result = mysql_query.list_databases()
     return {"data": result}
 
 
 @router.post("/search_tables")
-async def search_tables(request: SearchTablesRequest):
+def search_tables(request: SearchTablesRequest):
     """搜索数据库中的表"""
     result = mysql_query.search_tables(request.database_id, request.keyword)
     return {"data": result}
 
 
 @router.post("/describe")
-async def describe_table(request: DescribeRequest):
+def describe_table(request: DescribeRequest):
     """查询表结构"""
     result = mysql_query.describe_table(request.database_id, request.table_name)
     return {"data": result}
 
 
 @router.post("/query")
-async def query_mysql_data(request: QueryRequest):
+def query_mysql_data(request: QueryRequest):
     """执行查询SQL"""
     result = mysql_query.query_data(request.database_id, request.sql, request.limit)
     return {"data": result}

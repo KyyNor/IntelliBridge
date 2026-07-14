@@ -86,8 +86,8 @@ class HiveQuery:
         """获取 Hive 元数据库连接"""
         return mysql_pool.get_connection("mysql_80_metastore_hive_db")
 
-    def _get_connection(self) -> hive.Connection:
-        """获取 Hive 连接（每次从连接池获取，支持自动重连）"""
+    def _get_connection(self):
+        """获取一个独占 Hive 查询连接上下文。"""
         return hive_pool.get_connection()
 
     def _normalize_sql(self, sql: str) -> str:
@@ -149,30 +149,30 @@ class HiveQuery:
             if database not in db_names:
                 return {"error": f"数据库 '{database}' 不存在", "available_databases": available_dbs}
 
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            try:
-                # 查看表结构
-                cursor.execute(f"DESCRIBE {database}.{table}")
-                results = cursor.fetchall()
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    # 查看表结构
+                    cursor.execute(f"DESCRIBE {database}.{table}")
+                    results = cursor.fetchall()
 
-                if not results:
-                    return {"error": f"表 {table_full_name} 不存在或无数据"}
+                    if not results:
+                        return {"error": f"表 {table_full_name} 不存在或无数据"}
 
-                # 构造 dict 格式
-                columns = []
-                for row in results:
-                    columns.append({
-                        "column_name": row[0] if row[0] else "",
-                        "data_type": row[1] if row[1] else "",
-                        "comment": row[2] if len(row) > 2 and row[2] else ""
-                    })
+                    # 构造 dict 格式
+                    columns = []
+                    for row in results:
+                        columns.append({
+                            "column_name": row[0] if row[0] else "",
+                            "data_type": row[1] if row[1] else "",
+                            "comment": row[2] if len(row) > 2 and row[2] else ""
+                        })
 
-                logger.info(f"查询表结构成功: {table_full_name}")
-                return {"database_table": table_full_name, "columns": columns, "total": len(columns)}
+                    logger.info(f"查询表结构成功: {table_full_name}")
+                    return {"database_table": table_full_name, "columns": columns, "total": len(columns)}
 
-            finally:
-                cursor.close()
+                finally:
+                    cursor.close()
 
         except Exception as e:
             error_msg = f"查询表结构失败: {str(e)}"
@@ -277,36 +277,36 @@ class HiveQuery:
                 final_sql = f"{normalized_sql} LIMIT {limit}"
 
             # 执行查询
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            try:
-                logger.info(f"执行查询: {final_sql}")
-                cursor.execute(final_sql)
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    logger.info(f"执行查询: {final_sql}")
+                    cursor.execute(final_sql)
 
-                # 获取结果
-                results = cursor.fetchall()
-                if not results:
-                    return {"error": "查询结果为空,请检查筛选条件后重试(数据日期格式为yyyy-MM-dd)"}
+                    # 获取结果
+                    results = cursor.fetchall()
+                    if not results:
+                        return {"error": "查询结果为空,请检查筛选条件后重试(数据日期格式为yyyy-MM-dd)"}
 
-                # 获取列名
-                columns = [desc[0] for desc in cursor.description]
+                    # 获取列名
+                    columns = [desc[0] for desc in cursor.description]
 
-                # 构造 dict 格式
-                rows = []
-                for row in results:
-                    row_dict = {}
-                    for i, item in enumerate(row):
-                        if item is None:
-                            row_dict[columns[i]] = None
-                        else:
-                            row_dict[columns[i]] = item
-                    rows.append(row_dict)
+                    # 构造 dict 格式
+                    rows = []
+                    for row in results:
+                        row_dict = {}
+                        for i, item in enumerate(row):
+                            if item is None:
+                                row_dict[columns[i]] = None
+                            else:
+                                row_dict[columns[i]] = item
+                        rows.append(row_dict)
 
-                logger.info(f"查询成功，返回 {len(results)} 条数据")
-                return {"rows": rows, "columns": columns, "total": len(rows)}
+                    logger.info(f"查询成功，返回 {len(results)} 条数据")
+                    return {"rows": rows, "columns": columns, "total": len(rows)}
 
-            finally:
-                cursor.close()
+                finally:
+                    cursor.close()
 
         except Exception as e:
             error_msg = f"查询失败: {str(e)}"
@@ -438,7 +438,8 @@ class HiveQuery:
             Dict 格式，含分页信息和表列表
         """
         # 限制 page_size 最大为 50
-        page_size = min(page_size, 50)
+        page = max(1, page)
+        page_size = min(max(1, page_size), 50)
 
         try:
             # 尝试从缓存读取，无缓存或过期则重新拉取
@@ -482,7 +483,7 @@ class HiveQuery:
             return {"error": error_msg}
 
     def close(self):
-        """关闭连接（委托给连接池）"""
+        """关闭 Hive 查询资源管理器。"""
         try:
             hive_pool.close()
             logger.info("查询连接已关闭")
@@ -496,28 +497,28 @@ hive_query = HiveQuery()
 
 # API 路由
 @router.post("/describe")
-async def describe_table(request: DescribeRequest):
+def describe_table(request: DescribeRequest):
     """查看 Hive 表结构"""
     result = hive_query.describe_table(request.table_name)
     return {"data": result}
 
 
 @router.post("/query")
-async def query_hive_data(request: QueryRequest):
+def query_hive_data(request: QueryRequest):
     """查询 Hive 数据"""
     result = hive_query.query_data(request.sql, request.limit)
     return {"data": result}
 
 
 @router.post("/list-databases")
-async def list_databases(request: ListDatabaseRequest):
+def list_databases(request: ListDatabaseRequest):
     """列出所有 Hive 数据库及表数量"""
     result = hive_query.list_databases(request.blacklist)
     return {"data": result}
 
 
 @router.post("/list-tables")
-async def list_tables(request: ListTableRequest):
+def list_tables(request: ListTableRequest):
     """列出指定数据库的表"""
     result = hive_query.list_tables(
         request.database,

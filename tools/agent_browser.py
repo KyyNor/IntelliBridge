@@ -199,7 +199,7 @@ agent_browser = AgentBrowser()
 
 # API 路由
 @router.post("/api/agent-browser")
-async def execute_agent_browser(request: AgentBrowserRequest):
+def execute_agent_browser(request: AgentBrowserRequest):
     """执行 Agent Browser 命令"""
     result = agent_browser.execute(request.session_name, request.command)
     return {"data": result}

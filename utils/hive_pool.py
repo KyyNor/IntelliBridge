@@ -1,88 +1,127 @@
-import time
-from threading import Lock
+"""Bounded Hive query resource manager.
+
+PyHive connections are not shared between requests. A semaphore limits the
+number of active connections to the Spark concurrency budget.
+"""
+
+from contextlib import contextmanager
+import threading
+from typing import Callable, Optional
+
 from pyhive import hive
-from typing import Optional
-from utils.logger import logger
+
 from utils.config import config
+from utils.logger import logger
 
 
 class HiveConnectionPool:
-    """Hive 连接池"""
+    """Manage independent Hive connections behind a bounded query budget."""
 
-    # 重连间隔（秒），默认1小时
-    RECONNECT_INTERVAL = 3600
-
-    def __init__(self):
-        """初始化连接池配置"""
+    def __init__(
+        self,
+        max_concurrent: Optional[int] = None,
+        queue_timeout: Optional[float] = None,
+        connection_factory: Optional[Callable[..., object]] = None,
+    ):
         self.host = config.get("hive.host", "localhost")
         self.port = config.get("hive.port", 10000)
         self.username = config.get("hive.username", "default")
         self.database = config.get("hive.database", "default")
-        self._connection: Optional[hive.Connection] = None
-        self._connected_time: Optional[float] = None  # 连接创建时间戳
-        self._lock = Lock()
+        self.max_concurrent = max(
+            1,
+            int(
+                max_concurrent
+                if max_concurrent is not None
+                else config.get("hive.max_concurrent", 2)
+            ),
+        )
+        self.queue_timeout = float(
+            queue_timeout
+            if queue_timeout is not None
+            else config.get("hive.queue_timeout", 60.0)
+        )
+        if self.queue_timeout <= 0:
+            raise ValueError("queue_timeout must be greater than zero")
 
-    def _should_reconnect(self) -> bool:
-        """判断是否需要重连"""
-        if self._connection is None:
-            return True
-        if self._connected_time is None:
-            return True
-        # 超过重连间隔则重连
-        return (time.time() - self._connected_time) > self.RECONNECT_INTERVAL
+        self._connection_factory = connection_factory or hive.Connection
+        self._semaphore = threading.BoundedSemaphore(self.max_concurrent)
+        self._state_lock = threading.Lock()
+        self._connections: set[object] = set()
+        self._active = 0
+        self._closed = False
 
-    def _force_close(self):
-        """强制关闭连接"""
-        if self._connection:
-            try:
-                self._connection.close()
-                logger.info("Hive 连接已关闭（定时重连）")
-            except Exception as e:
-                logger.warning(f"关闭连接时出错: {e}")
-            finally:
-                self._connection = None
-                self._connected_time = None
+    @contextmanager
+    def get_connection(self, timeout: Optional[float] = None):
+        """Yield one exclusive Hive connection and close it on exit."""
 
-    def get_connection(self) -> hive.Connection:
-        """
-        获取 Hive 连接（单例模式，支持定时重连）
+        wait_timeout = self.queue_timeout if timeout is None else float(timeout)
+        if wait_timeout <= 0:
+            raise ValueError("timeout must be greater than zero")
 
-        Returns:
-            Hive 连接对象
-        """
-        with self._lock:
-            # 检查是否需要重连（首次连接或超过重连间隔）
-            if self._should_reconnect():
-                self._force_close()
+        acquired = self._semaphore.acquire(timeout=wait_timeout)
+        if not acquired:
+            raise TimeoutError(
+                f"Hive 查询并发已满（最多 {self.max_concurrent} 个），"
+                f"等待超过 {wait_timeout:g} 秒"
+            )
 
-            if self._connection is None:
+        connection = None
+        try:
+            with self._state_lock:
+                if self._closed:
+                    raise RuntimeError("Hive 连接管理器已关闭")
+
+            logger.info(f"正在连接 Hive: {self.host}:{self.port}")
+            connection = self._connection_factory(
+                host=self.host,
+                port=self.port,
+                username=self.username,
+                database=self.database,
+            )
+            with self._state_lock:
+                self._connections.add(connection)
+                self._active += 1
+            logger.info("Hive 连接成功")
+            yield connection
+        finally:
+            if connection is not None:
+                with self._state_lock:
+                    self._connections.discard(connection)
+                    self._active = max(0, self._active - 1)
                 try:
-                    logger.info(f"正在连接 Hive: {self.host}:{self.port}")
-                    self._connection = hive.Connection(
-                        host=self.host,
-                        port=self.port,
-                        username=self.username,
-                        database=self.database
-                    )
-                    self._connected_time = time.time()
-                    logger.info("Hive 连接成功")
-                except Exception as e:
-                    logger.error(f"Hive 连接失败: {e}")
-                    raise
+                    connection.close()
+                    logger.info("Hive 查询连接已关闭")
+                except Exception as exc:
+                    logger.warning(f"关闭 Hive 查询连接时出错: {exc}")
+            self._semaphore.release()
 
-            return self._connection
+    connection = get_connection
 
-    def close(self):
-        """关闭连接"""
-        if self._connection:
+    def get_status(self) -> dict:
+        """Return resource state for readiness checks."""
+
+        with self._state_lock:
+            active = self._active
+            closed = self._closed
+        return {
+            "healthy": not closed,
+            "closed": closed,
+            "max_concurrent": self.max_concurrent,
+            "active": active,
+        }
+
+    def close(self) -> None:
+        """Prevent new queries and close active connections during shutdown."""
+
+        with self._state_lock:
+            self._closed = True
+            connections = list(self._connections)
+
+        for connection in connections:
             try:
-                self._connection.close()
-                logger.info("Hive 连接已关闭")
-            except Exception as e:
-                logger.warning(f"关闭连接时出错: {e}")
-            finally:
-                self._connection = None
+                connection.close()
+            except Exception as exc:
+                logger.warning(f"关闭 Hive 连接时出错: {exc}")
 
 
-# 默认连接池实例
 hive_pool = HiveConnectionPool()

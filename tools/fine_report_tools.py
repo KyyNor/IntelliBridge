@@ -1127,13 +1127,13 @@ class PaginatedReq(BaseModel):
 
 
 @fr_router.post("/sample")
-async def api_sample(req: SampleReq) -> dict:
+def api_sample(req: SampleReq) -> dict:
     """REST 接口：获取报表样例"""
     return {"data": _fr_get_report_sample(req.report_path)}
 
 
 @fr_router.post("/download")
-async def api_download(req: DownloadReq) -> dict:
+def api_download(req: DownloadReq) -> dict:
     """REST 接口：设控件值、下载 Excel、按提取规则返回数据"""
     return {"data": _fr_download_fine_by_filter(
         report_path=req.report_path,
@@ -1144,7 +1144,7 @@ async def api_download(req: DownloadReq) -> dict:
 
 
 @fr_router.post("/paginated")
-async def api_paginated(req: PaginatedReq) -> dict:
+def api_paginated(req: PaginatedReq) -> dict:
     """REST 接口：CSV 式分页下载 Excel 数据"""
     return {"data": _fr_download_fine_paginated(
         report_path=req.report_path,
