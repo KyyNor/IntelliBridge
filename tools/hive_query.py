@@ -17,7 +17,7 @@ from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
-from utils.sql_utils import remove_comments, check_sql_type
+from utils.sql_utils import remove_comments, check_sql_type, enforce_limit
 
 from fastmcp import FastMCP
 
@@ -271,10 +271,8 @@ class HiveQuery:
             if filter_check_result != "ok":
                 return {"error": filter_check_result}
 
-            # 添加 LIMIT 限制到标准化 SQL
-            final_sql = normalized_sql
-            if not re.search(r"\bLIMIT\s+\d+", normalized_sql, re.IGNORECASE):
-                final_sql = f"{normalized_sql} LIMIT {limit}"
+            # 强制限制最终 SQL；REFRESH 不属于返回行查询，不追加 LIMIT。
+            final_sql = enforce_limit(normalized_sql, limit, 1000)
 
             # 执行查询
             with self._get_connection() as conn:

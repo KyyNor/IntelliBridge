@@ -2,6 +2,35 @@ import re
 from typing import List, Optional
 
 
+def enforce_limit(sql: str, requested_limit: int, max_limit: int) -> str:
+    """Apply a server-side row cap without changing Hive REFRESH statements.
+
+    An existing smaller LIMIT is preserved. An existing larger LIMIT is
+    reduced to the smaller of the requested and configured maximum.
+    """
+
+    safe_limit = max(1, min(int(requested_limit), int(max_limit)))
+    statement = sql.strip()
+    if re.match(r"^REFRESH\b", statement, re.IGNORECASE):
+        return statement
+
+    limit_match = re.search(
+        r"\bLIMIT\s+(\d+)(?P<tail>\s*(?:OFFSET\s+\d+)?\s*;?\s*)$",
+        statement,
+        re.IGNORECASE,
+    )
+    if limit_match:
+        existing_limit = int(limit_match.group(1))
+        final_limit = min(existing_limit, safe_limit)
+        return (
+            statement[: limit_match.start(1)]
+            + str(final_limit)
+            + statement[limit_match.end(1) :]
+        )
+
+    return f"{statement.rstrip(';').rstrip()} LIMIT {safe_limit}"
+
+
 def remove_comments(sql: str) -> str:
     """
     移除 SQL 中的注释

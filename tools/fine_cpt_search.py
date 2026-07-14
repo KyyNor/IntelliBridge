@@ -9,6 +9,8 @@ from datetime import datetime
 from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.decorators import log_function_info
+from utils.cache_snapshot import AtomicSnapshot
+from utils.search_utils import lookup_text_index
 from fastmcp import FastMCP
 
 fine_cpt_mcp = FastMCP("IntelliBridge FineCPT Search")
@@ -123,13 +125,8 @@ class FineCptSearch:
     CACHE_REFRESH_INTERVAL = 8 * 60 * 60  # 8小时
 
     def __init__(self):
-        # 主缓存：pk -> FineCptObject
-        self._cache: Dict[str, FineCptObject] = {}
-
-        # 辅助索引
-        self._index_by_db_table: Dict[str, List[str]] = {}   # 完整表名 -> pk列表（来源/去向通用）
-        self._index_by_project: Dict[str, List[str]] = {}   # base_sub_dir -> pk列表
-        self._index_by_display_name: Dict[str, List[str]] = {}  # 显示名 -> pk列表（模糊）
+        # (主缓存, 表索引, 项目索引, 显示名索引) 作为一个整体发布。
+        self._snapshot = AtomicSnapshot(({}, {}, {}, {}))
 
         # 缓存状态
         self._cache_loaded = False
@@ -181,10 +178,10 @@ class FineCptSearch:
                     rows = cursor.fetchall()
                     cursor.close()
 
-                self._cache.clear()
-                self._index_by_db_table.clear()
-                self._index_by_project.clear()
-                self._index_by_display_name.clear()
+                new_cache: Dict[str, FineCptObject] = {}
+                new_index_by_db_table: Dict[str, List[str]] = {}
+                new_index_by_project: Dict[str, List[str]] = {}
+                new_index_by_display_name: Dict[str, List[str]] = {}
 
                 # 第一步：按 PK 聚合（pk = cpt_file_path，同一文件多条血缘记录）
                 grouped: Dict[str, FineCptObject] = {}
@@ -198,37 +195,43 @@ class FineCptSearch:
                 # 第二步：seal 每个对象并建索引
                 for pk, obj in grouped.items():
                     obj.seal()
-                    self._cache[pk] = obj
+                    new_cache[pk] = obj
 
                     # 建表索引（来源表 + 目标表 均收入）
                     for st in obj.source_tables:
                         tbl = st.full_table_name
                         if tbl:
-                            self._add_to_index(self._index_by_db_table, tbl, pk)
+                            self._add_to_index(new_index_by_db_table, tbl, pk)
                     for tt in obj.target_tables:
                         tbl = tt.full_table_name
                         if tbl:
-                            self._add_to_index(self._index_by_db_table, tbl, pk)
+                            self._add_to_index(new_index_by_db_table, tbl, pk)
 
                     # 建项目索引
                     proj = obj.base_sub_dir
                     if proj:
-                        self._add_to_index(self._index_by_project, proj, pk)
+                        self._add_to_index(new_index_by_project, proj, pk)
 
                     # 建显示名索引（精准 + 模糊）
                     dn = obj.display_name
                     if dn:
-                        self._add_to_index(self._index_by_display_name, dn, pk)
+                        self._add_to_index(new_index_by_display_name, dn, pk)
                         # 同时对每个词做索引（支持空格分隔的多词）
                         for token in dn.replace("/", " ").replace("\\", " ").split():
                             if token:
-                                self._add_to_index(self._index_by_display_name, token, pk)
+                                self._add_to_index(new_index_by_display_name, token, pk)
 
+                self._snapshot.replace((
+                    new_cache,
+                    new_index_by_db_table,
+                    new_index_by_project,
+                    new_index_by_display_name,
+                ))
                 self._record_count = len(rows)
                 self._cache_loaded = True
                 self._last_load_time = datetime.now()
                 logger.info(
-                    f"FineCpt 缓存加载完成：{len(self._cache)} 个 CPT 文件，{self._record_count} 条血缘记录"
+                    f"FineCpt 缓存加载完成：{len(new_cache)} 个 CPT 文件，{self._record_count} 条血缘记录"
                 )
 
                 # 调度下次刷新
@@ -265,14 +268,15 @@ class FineCptSearch:
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """获取缓存统计"""
+        cache, index_by_db_table, index_by_project, index_by_display_name = self._snapshot.get()
         return {
             "loaded": self._cache_loaded,
-            "cpt_file_count": len(self._cache),
+            "cpt_file_count": len(cache),
             "raw_record_count": self._record_count,
             "last_load_time": self._last_load_time.isoformat() if self._last_load_time else None,
-            "index_by_db_table_keys": len(self._index_by_db_table),
-            "index_by_project_keys": len(self._index_by_project),
-            "index_by_display_name_keys": len(self._index_by_display_name),
+            "index_by_db_table_keys": len(index_by_db_table),
+            "index_by_project_keys": len(index_by_project),
+            "index_by_display_name_keys": len(index_by_display_name),
         }
 
     # ========== 路径/关键词匹配 ==========
@@ -337,9 +341,11 @@ class FineCptSearch:
         - 多条件交叉过滤
         """
         # 限制页大小
+        page = max(1, page)
         page_size = min(max(page_size, 1), 50)
 
         self.ensure_cache()
+        cache, index_by_db_table, _, index_by_display_name = self._snapshot.get()
         logger.info(
             f"FineCpt 血缘检索: code_path={code_path}, source_table={source_table}, "
             f"target_table={target_table}, lineage_type={lineage_type}"
@@ -352,7 +358,7 @@ class FineCptSearch:
         # 1.1 按路径（cpt_file_path）过滤
         if code_path:
             pks = {
-                pk for pk, obj in self._cache.items()
+                pk for pk, obj in cache.items()
                 if self._match_pk(pk, code_path) or self._match_pk(obj.full_template_path or "", code_path)
             }
             candidate_pks = candidate_pks & pks if candidate_pks else pks
@@ -367,12 +373,12 @@ class FineCptSearch:
 
             # 1.2.1 先用显示名倒排索引匹配
             dll = dl.lower()
-            for key, pk_list in self._index_by_display_name.items():
+            for key, pk_list in index_by_display_name.items():
                 if dll in key:
                     pks.update(pk_list)
 
             # 1.2.2 再用路径全文扫描匹配（支持完整路径、前缀、文件名）
-            for pk, obj in self._cache.items():
+            for pk, obj in cache.items():
                 if self._match_pk(pk, dl):
                     pks.add(pk)
                 elif obj.full_template_path and self._match_pk(obj.full_template_path, dl):
@@ -382,7 +388,7 @@ class FineCptSearch:
 
         # 1.3 按来源表过滤 -> 需要跨索引，且结果应当和前面条件AND
         if source_table:
-            pks = self._lookup_table_index(source_table, self._index_by_db_table, lambda obj: obj.source_tables)
+            pks = self._lookup_table_index(source_table, index_by_db_table, lambda obj: obj.source_tables)
             if candidate_pks:
                 candidate_pks &= pks
             else:
@@ -391,7 +397,7 @@ class FineCptSearch:
 
         # 1.4 按目标表过滤
         if target_table:
-            pks = self._lookup_table_index(target_table, self._index_by_db_table, lambda obj: obj.target_tables)
+            pks = self._lookup_table_index(target_table, index_by_db_table, lambda obj: obj.target_tables)
             if candidate_pks:
                 candidate_pks &= pks
             else:
@@ -405,7 +411,7 @@ class FineCptSearch:
         # ---------- 第二步：枚举候选，逐一匹配 ----------
         all_results: List[FineCptObject] = []
 
-        for pk, obj in self._cache.items():
+        for pk, obj in cache.items():
             # 无候选集时跳过已在前面过滤掉的
             if candidate_pks is not None and pk not in candidate_pks:
                 continue
@@ -467,26 +473,9 @@ class FineCptSearch:
         if not ft:
             return set()
 
-        result_pks = set()
-
-        # 精准命中（一级索引查到则直接返回）
-        if ft in index:
-            result_pks.update(index[ft])
-
-        # 通配前缀（前缀 * 结尾 => 做 startswith 扫描）
-        # 如输入 "dim_" => 找所有 dim_* 开头的表
-        if ft.endswith("_") or ft.endswith("."):
-            prefix = ft.rstrip("_").rstrip(".")
-            for key, pk_list in index.items():
-                if key.startswith(prefix):
-                    result_pks.update(pk_list)
-
-        # 包含匹配（二次扫描，idx 可能稀疏故做补救）
-        for key, pk_list in index.items():
-            if ft in key and key not in index:
-                result_pks.update(pk_list)
-
-        return result_pks
+        # 索引键本身就是完整表名，直接做大小写不敏感的包含匹配。
+        # 这里不使用 attr_accessor；source/target 方向行为保持本轮约定不变。
+        return lookup_text_index(ft, index)
 
     # ========== 表级别查询（哪些 CPT 用了某表 / 被某表写入）==========
 
@@ -505,21 +494,23 @@ class FineCptSearch:
             direction: 查来源表/source，还是目标表/target，或 all
             page/page_size: 分页
         """
+        page = max(1, page)
         page_size = min(max(page_size, 1), 50)
         self.ensure_cache()
+        cache, index_by_db_table, _, _ = self._snapshot.get()
 
         candidates: Optional[set] = None
 
         if direction in ("source", "all"):
             src_pks = self._lookup_table_index(
-                table_name, self._index_by_db_table,
+                table_name, index_by_db_table,
                 lambda obj: obj.source_tables
             )
             candidates = src_pks if direction == "source" else candidates.union(src_pks) if candidates else src_pks
 
         if direction in ("target", "all"):
             tgt_pks = self._lookup_table_index(
-                table_name, self._index_by_db_table,
+                table_name, index_by_db_table,
                 lambda obj: obj.target_tables
             )
             if candidates is None:
@@ -540,7 +531,7 @@ class FineCptSearch:
         end_idx = start_idx + page_size
         page_pks = all_pks[start_idx:end_idx]
 
-        results = [self._cache[pk].to_dict() for pk in page_pks if pk in self._cache]
+        results = [cache[pk].to_dict() for pk in page_pks if pk in cache]
 
         return {
             "results": results,
@@ -631,4 +622,3 @@ def cpt_search_by_table(
         page_size=page_size,
     )
     return json.dumps(result, ensure_ascii=False, indent=2)
-

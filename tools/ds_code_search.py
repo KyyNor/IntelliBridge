@@ -9,6 +9,7 @@ from datetime import datetime
 from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.decorators import log_function_info
+from utils.cache_snapshot import AtomicSnapshot
 from fastmcp import FastMCP
 
 ds_search_mcp = FastMCP("IntelliBridge DolphinScheduler Search")
@@ -27,11 +28,8 @@ class DataFactoryCodeSearch:
 
     def __init__(self):
         # 主缓存：以 code_path 为唯一键，类似文件系统路径
-        self._cache: Dict[str, Dict] = {}
-
-        # 辅助索引：按输入/输出表索引（加速表级别的查询）
-        self._index_by_from_table: Dict[str, List[str]] = {}
-        self._index_by_to_table: Dict[str, List[str]] = {}
+        # (主缓存, 输入表索引, 输出表索引) 作为一个整体发布。
+        self._snapshot = AtomicSnapshot(({}, {}, {}))
 
         # 缓存状态
         self._cache_loaded = False
@@ -108,10 +106,10 @@ class DataFactoryCodeSearch:
                     results = cursor.fetchall()
                     cursor.close()
 
-                # 清空旧缓存
-                self._cache.clear()
-                self._index_by_from_table.clear()
-                self._index_by_to_table.clear()
+                # 在新字典中完整构建，完成后再一次性发布。
+                new_cache: Dict[str, Dict] = {}
+                new_index_by_from_table: Dict[str, List[str]] = {}
+                new_index_by_to_table: Dict[str, List[str]] = {}
 
                 # 第一步：按关键字段分组，把相同任务的多条记录合并
                 grouped_tasks = {}  # {(project_name, process_name, task_name, process_status, task_status, sql_code, lineage_type): [rows...]}
@@ -200,14 +198,24 @@ class DataFactoryCodeSearch:
                     }
 
                     # 存入主缓存（key就是完整的code_path路径字符串）
-                    self._cache[code_path] = task_obj
+                    new_cache[code_path] = task_obj
 
                     # 建立表级别索引
-                    self._build_table_index(code_path, task_obj)
+                    self._build_table_index(
+                        code_path,
+                        task_obj,
+                        new_index_by_from_table,
+                        new_index_by_to_table,
+                    )
 
+                self._snapshot.replace((
+                    new_cache,
+                    new_index_by_from_table,
+                    new_index_by_to_table,
+                ))
                 self._cache_loaded = True
                 self._last_load_time = datetime.now()
-                logger.info(f"缓存加载完成，共 {len(self._cache)} 条任务")
+                logger.info(f"缓存加载完成，共 {len(new_cache)} 条任务")
 
                 # 启动定时刷新
                 self._schedule_refresh()
@@ -218,19 +226,25 @@ class DataFactoryCodeSearch:
                 logger.error(f"缓存加载失败: {e}")
                 return False
 
-    def _build_table_index(self, code_path: str, task_obj: Dict):
+    def _build_table_index(
+        self,
+        code_path: str,
+        task_obj: Dict,
+        index_by_from_table: Dict[str, List[str]],
+        index_by_to_table: Dict[str, List[str]],
+    ):
         """构建表级别索引"""
         # 按输入表索引
         for table in task_obj.get("from_database_table", []):
-            if table not in self._index_by_from_table:
-                self._index_by_from_table[table] = []
-            self._index_by_from_table[table].append(code_path)
+            if table not in index_by_from_table:
+                index_by_from_table[table] = []
+            index_by_from_table[table].append(code_path)
 
         # 按输出表索引
         for table in task_obj.get("to_database_table", []):
-            if table not in self._index_by_to_table:
-                self._index_by_to_table[table] = []
-            self._index_by_to_table[table].append(code_path)
+            if table not in index_by_to_table:
+                index_by_to_table[table] = []
+            index_by_to_table[table].append(code_path)
 
     def _match_path(self, full_path: str, filter_path: str) -> bool:
         """
@@ -297,20 +311,21 @@ class DataFactoryCodeSearch:
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """获取缓存统计信息"""
+        cache, index_by_from_table, index_by_to_table = self._snapshot.get()
         # 统计项目数量（通过路径第二级目录）
         projects = set()
-        for path in self._cache.keys():
+        for path in cache.keys():
             parts = path.split('/')
             if len(parts) >= 3:
                 projects.add(parts[2])
 
         return {
             "loaded": self._cache_loaded,
-            "task_count": len(self._cache),
+            "task_count": len(cache),
             "last_load_time": self._last_load_time.isoformat() if self._last_load_time else None,
             "project_count": len(projects),
-            "from_table_count": len(self._index_by_from_table),
-            "to_table_count": len(self._index_by_to_table)
+            "from_table_count": len(index_by_from_table),
+            "to_table_count": len(index_by_to_table)
         }
 
     # ========== Task 4: 基于缓存实现 datafactory_sql_search ==========
@@ -354,15 +369,17 @@ class DataFactoryCodeSearch:
             after = self.MAX_TOTAL_CONTEXT_LINES - before
 
         # 限制 page_size 最多50
+        page = max(1, page)
         page_size = min(max(page_size, 1), 50)
 
         # 确保缓存已加载
         self.ensure_cache()
+        cache, _, _ = self._snapshot.get()
         logger.info(f"开始搜索: pattern={pattern}, code_path={code_path}, code_status={code_status}")
 
         # 1. 通过路径过滤获取候选任务列表（直接在所有keys上做字符串匹配）
         candidate_paths = [
-            p for p in self._cache.keys()
+            p for p in cache.keys()
             if self._match_path(p, code_path)
         ]
 
@@ -370,12 +387,12 @@ class DataFactoryCodeSearch:
         if code_status == "已上线":
             candidate_paths = [
                 cp for cp in candidate_paths
-                if self._cache.get(cp, {}).get("任务状态") == "已上线"
+                if cache.get(cp, {}).get("任务状态") == "已上线"
             ]
         elif code_status == "未上线":
             candidate_paths = [
                 cp for cp in candidate_paths
-                if self._cache.get(cp, {}).get("任务状态") == "未上线"
+                if cache.get(cp, {}).get("任务状态") == "未上线"
             ]
 
         # 3. 编译正则表达式（启用忽略大小写匹配）
@@ -389,7 +406,7 @@ class DataFactoryCodeSearch:
         task_matches = {}
 
         for code_path_key in candidate_paths:
-            task_obj = self._cache.get(code_path_key)
+            task_obj = cache.get(code_path_key)
             if not task_obj:
                 continue
 
@@ -490,6 +507,7 @@ class DataFactoryCodeSearch:
         """
         # 确保缓存已加载
         self.ensure_cache()
+        cache, index_by_from_table, index_by_to_table = self._snapshot.get()
         logger.info(f"查询任务详情: code_path={code_path}, from_table={from_table}, to_table={to_table}")
 
         # 参数校验：至少需要一个筛选条件
@@ -501,7 +519,7 @@ class DataFactoryCodeSearch:
 
         # 1. 按路径过滤（直接字符串匹配）
         if code_path:
-            for path in self._cache.keys():
+            for path in cache.keys():
                 if self._match_path(path, code_path):
                     candidate_paths.add(path)
 
@@ -510,7 +528,7 @@ class DataFactoryCodeSearch:
             temp = set()
             escaped = regex.escape(from_table.strip())
             pattern = regex.compile(escaped, flags=regex.IGNORECASE)
-            for table, paths in self._index_by_from_table.items():
+            for table, paths in index_by_from_table.items():
                 # 直接在整个表名上用 regex 匹配
                 if pattern.search(table):
                     temp.update(paths)
@@ -521,7 +539,7 @@ class DataFactoryCodeSearch:
             temp = set()
             escaped = regex.escape(to_table.strip())
             pattern = regex.compile(escaped, flags=regex.IGNORECASE)
-            for table, paths in self._index_by_to_table.items():
+            for table, paths in index_by_to_table.items():
                 if pattern.search(table):
                     temp.update(paths)
             candidate_paths = candidate_paths.intersection(temp) if candidate_paths else temp
@@ -535,7 +553,7 @@ class DataFactoryCodeSearch:
         # 构建返回结果
         tasks = []
         for code_path_key in candidate_paths:
-            task_obj = self._cache.get(code_path_key)
+            task_obj = cache.get(code_path_key)
             if not task_obj:
                 continue
 

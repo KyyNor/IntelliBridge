@@ -12,7 +12,7 @@ from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
-from utils.sql_utils import remove_comments, check_sql_type
+from utils.sql_utils import remove_comments, check_sql_type, enforce_limit
 
 from fastmcp import FastMCP
 
@@ -279,10 +279,8 @@ class MySQLQuery:
             # 标准化 SQL
             normalized_sql = self._normalize_sql(sql)
 
-            # 添加 LIMIT 限制
-            final_sql = normalized_sql
-            if not re.search(r"\bLIMIT\s+\d+", normalized_sql, re.IGNORECASE):
-                final_sql = f"{normalized_sql} LIMIT {limit}"
+            # 强制限制最终 SQL，不能被调用方自带的大 LIMIT 绕过。
+            final_sql = enforce_limit(normalized_sql, limit, self.MAX_LIMIT)
 
             # 执行查询
             with mysql_pool.get_connection(database_id) as conn:
