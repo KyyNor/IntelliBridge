@@ -21,8 +21,9 @@ from utils.logger import logger
 from utils.decorators import log_function_info
 from utils.cache import cache as cache_manager
 from utils.mysql_pool import mysql_pool
+from utils.timeouts import OperationTimeout, get_remaining_timeout
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from difflib import SequenceMatcher
 
 from fastmcp import FastMCP
@@ -134,7 +135,9 @@ def _wait_for_file_stable(
     start_time = time.time()
 
     while True:
-        if time.time() - start_time > timeout:
+        remaining = get_remaining_timeout()
+        effective_timeout = timeout if remaining is None else min(timeout, remaining)
+        if time.time() - start_time > effective_timeout:
             raise TimeoutError(f"等待文件稳定超时，当前大小: {last_size}")
 
         if not os.path.exists(filepath):
@@ -907,7 +910,13 @@ def _validate_report_path(report_path: str) -> dict | None:
 
 def _executor_submit_and_wait(fn, *args, **kwargs):
     """在线程池中执行 fn 并阻塞等待结果"""
-    return _fr_executor.submit(fn, *args, **kwargs).result()
+    future = _fr_executor.submit(fn, *args, **kwargs)
+    remaining = get_remaining_timeout()
+    try:
+        return future.result(timeout=remaining)
+    except FutureTimeoutError as exc:
+        future.cancel()
+        raise OperationTimeout("FineReport 操作", remaining or 0) from exc
 
 
 def _slice_page_from_base_result(
@@ -953,7 +962,7 @@ def _fr_get_report_sample(report_path: str) -> str:
     if cached is not None:
         logger.info(f"[缓存命中] report_sample {report_path}")
         return cached
-    result = _fr_executor.submit(FineReportTools().get_report_sample, report_url).result()
+    result = _executor_submit_and_wait(FineReportTools().get_report_sample, report_url)
     # 仅成功时缓存；失败（如登录失败、页面报错）不写入缓存，避免错误结果被长期复用
     if not result.startswith("# 错误"):
         cache_manager.set(cache_key, result, expire=3 * 86400)
@@ -1023,10 +1032,10 @@ def _fr_download_fine_by_filter(
         logger.info(f"[缓存命中] download_fine_by_filter {report_url} controls={controls} target_date={target_date}")
         return cached
 
-    result = _fr_executor.submit(
+    result = _executor_submit_and_wait(
         FineReportTools().download_fine_by_filter,
         report_url, controls, locators, target_date,
-    ).result()
+    )
     # 仅成功时缓存；失败时不写入缓存
     try:
         if result.get("success"):

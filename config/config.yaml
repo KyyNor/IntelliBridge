@@ -1,11 +1,17 @@
 # IntelliBridge 配置文件
 
+# 服务级超时
+server:
+  request_timeout: 300
+
 # Hive 连接配置
 hive:
   host: "localhost"
   port: 10000
   username: "hive"
   database: "default"
+  max_concurrent: 2
+  queue_timeout: 60
   # 数据库黑名单（list_databases 时不返回这些数据库）
   database_blacklist:
     - default
@@ -23,6 +29,10 @@ agent_browser:
 
 # MySQL 连接配置
 mysql:
+  pool_acquire_timeout: 30
+  connect_timeout: 10
+  read_timeout: 60
+  write_timeout: 60
   nodes:
     - name: mysql_121
       host: "localhost"

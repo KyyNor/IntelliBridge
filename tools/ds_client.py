@@ -9,6 +9,7 @@ import requests
 from utils.logger import logger
 from utils.decorators import log_function_info
 from utils.config import config
+from utils.timeouts import OperationTimeout, get_remaining_timeout
 from fastmcp import FastMCP
 
 # ── 从配置文件加载 ────────────────────────────────────────────────
@@ -65,8 +66,12 @@ class DSClient:
         headers = dict(self._session.headers)
         logger.info(f"[DS 请求] method={method} | url={url} | headers={headers} | data={data} | params={params}")
         try:
+            remaining = get_remaining_timeout()
+            if remaining is not None and remaining <= 0:
+                raise OperationTimeout("DolphinScheduler 请求", 0)
+            request_timeout = 30.0 if remaining is None else max(0.1, min(30.0, remaining))
             resp = self._session.request(method, url, data=data, params=params,
-                                         timeout=30)
+                                         timeout=request_timeout)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.HTTPError as e:

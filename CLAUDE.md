@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-IntelliBridge is a backend service providing data query and browser automation tools via dual interfaces:
-- **FastAPI** on port 49000 — REST API endpoints
-- **MCP (Model Context Protocol)** on port 49001 — AI agent tool interface
+IntelliBridge is a backend service providing data query and browser automation tools through one combined ASGI application:
+- **FastAPI REST API** and **MCP Streamable HTTP** share port 49000
+- MCP applications are mounted under `/mcp/*`
+- REST endpoints are mounted under `/api/*`
 
 ## Development Commands
 
@@ -15,7 +16,7 @@ IntelliBridge is a backend service providing data query and browser automation t
 python main.py
 
 # Docker build (online)
-docker build -t intellibridge:latest .
+docker build -f docker/Dockerfile -t intellibridge:latest .
 
 # Docker build with offline support
 ./build.sh
@@ -27,9 +28,12 @@ docker-compose up
 ## Architecture
 
 ### Server Architecture
-`main.py` starts two async servers simultaneously via `asyncio.gather()`:
-- FastAPI (`run_fastapi()`) — HTTP REST API
-- MCP (`run_mcp()`) — Streamable HTTP transport for AI agents
+`main.py` serves `combined_app` through Uvicorn on port 49000. The app combines the REST routes and individual FastMCP HTTP applications, and applies CORS, request deadlines, and a combined lifespan to the served app.
+
+Health endpoints:
+- `/health/live` checks process liveness only.
+- `/health/ready` checks initialized MySQL pools and Hive resource state.
+- `/health` is an alias for readiness status.
 
 ### Tool Layer (`tools/`)
 Each tool exposes functionality through **both** FastAPI routers and MCP `@mcp.tool()` decorators:
@@ -41,21 +45,25 @@ Each tool exposes functionality through **both** FastAPI routers and MCP `@mcp.t
 - `config.py` — YAML config manager with dot-notation access (`config.get("mysql.nodes")`)
 - `cache.py` — Disk-based caching (diskcache) with TTL support
 - `logger.py` — Loguru wrapper with daily rotation (30-day retention)
-- `mcp.py` — FastMCP server instance (imported by tools for `@mcp.tool()` decorator)
-- `hive_pool.py` — Hive connection singleton
-- `mysql_pool.py` — MySQL connection pool per node/database
-- `decorators.py` — `@log_function_info` for request tracing (request_id, elapsed time)
+- `middleware.py` — ASGI request deadline and timeout responses
+- `cache_snapshot.py` — atomic cache snapshot publication
+- `hive_pool.py` — bounded Hive query leases with one connection per query
+- `mysql_pool.py` — MySQL connection pool per node/database with bounded acquisition
+- `decorators.py` — `@log_function_info` and bounded asynchronous call-log writing
 
 ### Configuration
 `config/config.yaml` defines:
 - `hive.*` — Hive connection (host, port, username, database)
 - `mysql.nodes[]` — Per-node MySQL connections with database lists
 - `agent_browser.cdp_port` — CDP port for browser automation
+- `server.request_timeout` — combined application request deadline in seconds
 
 ### Key Patterns
 - **SQL Normalization**: Tools use `sqlglot` to normalize and uppercase SQL before execution
 - **Caching Strategy**: Hive queries (1h), MySQL table metadata (10-30min), MySQL query results (5min)
-- **Connection Management**: Hive uses singleton pattern; MySQL uses per-node-per-database singletons
+- **Connection Management**: Hive allows at most two independent query connections; MySQL uses per-node pools with bounded acquisition waits
+- **Timeouts**: The combined ASGI app has a 300-second default request deadline; nested code can read the remaining deadline through `utils.timeouts.get_remaining_timeout()`
+- **Cache Refresh**: DataFactory and FineCPT caches build new snapshots before publishing them
 - **Security**: Hive enforces filter conditions on non-whitelisted tables; MySQL prevents cross-database queries
 
 ## Docker Architecture

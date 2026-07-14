@@ -68,7 +68,7 @@ urllib3==2.6.3
 uuid-utils==0.14.1
 xxhash==3.6.0
 zstandard==0.25.0
-playwright # datafactory_scripts 使用
-paramiko # datafactory_scripts 使用
-pandas
-openpyxl
+playwright==1.52.0 # datafactory_scripts 使用
+paramiko==3.5.1 # datafactory_scripts 使用
+pandas==2.2.3
+openpyxl==3.1.5

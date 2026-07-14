@@ -1,6 +1,8 @@
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastmcp.utilities.lifespan import combine_lifespans
 import uvicorn
 
@@ -12,7 +14,12 @@ from tools.memory import memory_mcp
 from tools.ds_code_search import ds_search_mcp, DataFactoryCodeSearch
 from tools.ds_client import ds_mcp
 from tools.fine_cpt_search import fine_cpt_mcp
+from utils.config import config
+from utils.decorators import shutdown_call_log_writer
+from utils.hive_pool import hive_pool
 from utils.logger import logger
+from utils.middleware import RequestTimeoutMiddleware
+from utils.mysql_pool import mysql_pool
 
 memory_mcp_app = memory_mcp.http_app(path='/mcp/memory')
 hive_mcp_app = hive_mcp.http_app(path='/mcp/hive')
@@ -44,15 +51,68 @@ async def root():
     return {"message": "Welcome to IntelliBridge API"}
 
 
+def _readiness_payload() -> tuple[dict, int]:
+    mysql_status = mysql_pool.get_readiness()
+    hive_status = hive_pool.get_status()
+    checks = {"mysql": mysql_status, "hive": hive_status}
+    ready = all(check.get("healthy", False) for check in checks.values())
+    return {
+        "status": "healthy" if ready else "not_ready",
+        "checks": checks,
+    }, 200 if ready else 503
+
+
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    payload, status_code = _readiness_payload()
+    return JSONResponse(payload, status_code=status_code)
+
+
+@app.get("/health/live")
+async def health_live():
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    payload, status_code = _readiness_payload()
+    return JSONResponse(payload, status_code=status_code)
 
 
 # 注册路由
 app.include_router(hive_router)
 app.include_router(agent_browser_router)
 app.include_router(mysql_router)
+app.include_router(fr_router)
+
+_mcp_lifespan = combine_lifespans(
+    memory_mcp_app.lifespan,
+    hive_mcp_app.lifespan,
+    mysql_mcp_app.lifespan,
+    ds_search_mcp_app.lifespan,
+    agent_browser_mcp_app.lifespan,
+    fr_mcp_app.lifespan,
+    fine_cpt_mcp_app.lifespan,
+    ds_mcp_app.lifespan,
+)
+
+
+def shutdown_resources() -> None:
+    """Flush background work and close process-owned resources."""
+
+    shutdown_call_log_writer()
+    hive_pool.close()
+    mysql_pool.close_all_pools()
+
+
+@asynccontextmanager
+async def combined_lifespan(application):
+    try:
+        async with _mcp_lifespan(application):
+            yield
+    finally:
+        shutdown_resources()
+
 
 combined_app = FastAPI(
     title="IntelliBridge",
@@ -68,16 +128,19 @@ combined_app = FastAPI(
         *fine_cpt_mcp_app.routes,
         *ds_mcp_app.routes,
     ],
-    lifespan=combine_lifespans(
-        memory_mcp_app.lifespan,
-        hive_mcp_app.lifespan,
-        mysql_mcp_app.lifespan,
-        ds_search_mcp_app.lifespan,
-        agent_browser_mcp_app.lifespan,
-        fr_mcp_app.lifespan,
-        fine_cpt_mcp_app.lifespan,
-        ds_mcp_app.lifespan,
-    ),
+    lifespan=combined_lifespan,
+)
+
+combined_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+combined_app.add_middleware(
+    RequestTimeoutMiddleware,
+    timeout_seconds=float(config.get("server.request_timeout", 300.0)),
 )
 
 async def main():
@@ -86,8 +149,8 @@ async def main():
     logger.info(f"FastAPI: http://0.0.0.0:49000")
     logger.info(f"MCP: http://0.0.0.0:49000/mcp")
 
-    config = uvicorn.Config(combined_app, host="0.0.0.0", port=49000, log_level="info")
-    server = uvicorn.Server(config)
+    uvicorn_config = uvicorn.Config(combined_app, host="0.0.0.0", port=49000, log_level="info")
+    server = uvicorn.Server(uvicorn_config)
     await server.serve()
 
 

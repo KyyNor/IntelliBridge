@@ -86,6 +86,18 @@ class MySQLConnectionPool:
                     port=node['port'],
                     user=node['username'],
                     password=node['password'],
+                    connect_timeout=int(node.get(
+                        "connect_timeout",
+                        config.get("mysql.connect_timeout", 10),
+                    )),
+                    read_timeout=int(node.get(
+                        "read_timeout",
+                        config.get("mysql.read_timeout", 60),
+                    )),
+                    write_timeout=int(node.get(
+                        "write_timeout",
+                        config.get("mysql.write_timeout", 60),
+                    )),
                     charset=node.get('charset', 'utf8mb4'),
                     cursorclass=pymysql.cursors.DictCursor,
                 )
@@ -114,6 +126,18 @@ class MySQLConnectionPool:
             output.append(f"{k},{description}")
 
         return output
+
+    def get_readiness(self) -> dict:
+        """Return pool initialization state without opening a new connection."""
+
+        configured_nodes = [node.get("name") for node in self.nodes_config]
+        unavailable = [name for name in configured_nodes if name not in self._pools]
+        return {
+            "healthy": bool(configured_nodes) and not unavailable,
+            "configured_nodes": configured_nodes,
+            "available_nodes": sorted(self._pools),
+            "unavailable_nodes": unavailable,
+        }
 
 
     def get_database_by_unique_id(self, unique_id: str) -> Optional[str]:
