@@ -1,0 +1,35 @@
+services:
+  spark-thrift-test:
+    image: apache/spark:v3.1.3
+    container_name: intellibridge-spark-thrift-test
+    user: "0"
+    ports:
+      - "10000:10000"
+    volumes:
+      - spark-test-warehouse:/tmp/spark-warehouse
+      - ./tests/spark_thrift/entrypoint.sh:/opt/spark-test/entrypoint.sh:ro
+    command: ["/bin/bash", "/opt/spark-test/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/10000'"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+      start_period: 15s
+
+  hive-error-collector:
+    build:
+      context: .
+      dockerfile: tests/spark_thrift/collector.Dockerfile
+    container_name: intellibridge-hive-error-collector
+    depends_on:
+      spark-thrift-test:
+        condition: service_healthy
+    environment:
+      HIVE_HOST: spark-thrift-test
+      HIVE_PORT: "10000"
+      OUTPUT_PATH: /output/hive-error-samples.json
+    volumes:
+      - ./tests/spark_thrift/output:/output
+
+volumes:
+  spark-test-warehouse:
