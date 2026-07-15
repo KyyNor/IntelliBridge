@@ -17,6 +17,7 @@ from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.cache import cache
 from utils.decorators import log_function_info
+from utils.hive_errors import normalize_hive_error
 from utils.sql_utils import remove_comments, check_sql_type, enforce_limit
 
 from fastmcp import FastMCP
@@ -175,8 +176,12 @@ class HiveQuery:
                     cursor.close()
 
         except Exception as e:
-            error_msg = f"查询表结构失败: {str(e)}"
-            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+            normalized_error = normalize_hive_error(e)
+            error_msg = f"查询表结构失败: {normalized_error['message']}"
+            logger.error(
+                f"{error_msg} [category={normalized_error['category']}]\n"
+                f"{traceback.format_exc()}"
+            )
             available_dbs = self.list_databases()
             return {"error": error_msg, "available_databases": available_dbs}
 
@@ -307,8 +312,12 @@ class HiveQuery:
                     cursor.close()
 
         except Exception as e:
-            error_msg = f"查询失败: {str(e)}"
-            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+            normalized_error = normalize_hive_error(e)
+            error_msg = f"查询失败: {normalized_error['message']}"
+            logger.error(
+                f"{error_msg} [category={normalized_error['category']}]\n"
+                f"{traceback.format_exc()}"
+            )
             return {"error": error_msg}
         finally:
             _query_semaphore.release()
