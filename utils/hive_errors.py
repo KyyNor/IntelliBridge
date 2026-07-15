@@ -77,11 +77,12 @@ def _classify(detail: str) -> Tuple[str, str]:
     )
     if column_match:
         column = column_match.group(1)
-        available = _normalize_column_names(column_match.group(2))
+        available, truncated = _normalize_column_names(column_match.group(2))
+        suffix = "等" if truncated else ""
         if available:
             return (
                 "missing_column",
-                f"列 `{column}` 不存在。可用列：{', '.join(available)}",
+                f"列 `{column}` 不存在。可用列：{', '.join(available)}{suffix}",
             )
         return "missing_column", f"列 `{column}` 不存在。"
 
@@ -124,18 +125,21 @@ def _classify(detail: str) -> Tuple[str, str]:
     return "unknown", f"Hive 查询失败：{fallback}"
 
 
-def _normalize_column_names(raw_columns: str) -> List[str]:
+def _normalize_column_names(raw_columns: str) -> Tuple[List[str], bool]:
+    """规范化列名，返回(列名列表, 是否被截断)"""
     columns: List[str] = []
+    truncated = False
     for raw_column in raw_columns.split(","):
+        if len(columns) > 12:
+            truncated = True
+            break
         column = raw_column.strip().strip("`'\"")
         if not column:
             continue
         column = column.rsplit(".", 1)[-1]
         if column not in columns:
             columns.append(column)
-        if len(columns) == 12:
-            break
-    return columns
+    return columns, truncated
 
 
 def _first_nonempty_line(value: str) -> str:
