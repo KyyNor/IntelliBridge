@@ -70,5 +70,5 @@ xxhash==3.6.0
 zstandard==0.25.0
 playwright==1.49.0 # datafactory_scripts 使用
 paramiko==3.4.0 # datafactory_scripts 使用
-pandas==2.3.3
+pandas==2.3.2
 openpyxl==3.1.5
