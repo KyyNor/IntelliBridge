@@ -2,7 +2,7 @@
 
 # 服务级超时
 server:
-  request_timeout: 300
+  request_timeout: 600
 
 # Hive 连接配置
 hive:

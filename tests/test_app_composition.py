@@ -23,6 +23,10 @@ class AppCompositionTests(unittest.TestCase):
         self.assertIn("RequestTimeoutMiddleware", source)
         self.assertIn("CORSMiddleware", source)
 
+    def test_default_request_timeout_is_600_seconds(self):
+        config = (MAIN.parent / "config" / "config.yaml").read_text(encoding="utf-8")
+        self.assertRegex(config, r"(?m)^\s*request_timeout:\s*600\s*$")
+
 
 if __name__ == "__main__":
     unittest.main()
