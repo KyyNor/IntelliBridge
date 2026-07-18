@@ -10,6 +10,7 @@ from utils.mysql_pool import mysql_pool
 from utils.logger import logger
 from utils.decorators import log_function_info
 from utils.cache_snapshot import AtomicSnapshot
+from utils.sql_overview import summarize_sql
 from fastmcp import FastMCP
 
 ds_search_mcp = FastMCP("IntelliBridge DolphinScheduler Search")
@@ -333,6 +334,10 @@ class DataFactoryCodeSearch:
     # 最大上下文行数限制，防止返回过多内容超出上下文范围
     MAX_TOTAL_CONTEXT_LINES = 100
 
+    # 返回内容字符数阈值：超过则触发降级，改返 SQL 概览 + 提示（不返原 SQL）。
+    # 空白 pattern 也会触发降级（空正则匹配每一行）。
+    FALLBACK_MAX_CHARS = 5000
+
     def search_sql_codes(
         self,
         pattern: str,
@@ -476,6 +481,51 @@ class DataFactoryCodeSearch:
 
         paginated_matches = matches[start_idx:end_idx]
 
+        # 7. 降级判断：pattern 为空 或 返回内容过大 → 不返原 SQL，改返概览 + 提示
+        #    （原 SQL 内容太长时 agent 根本看不到，不如直接给结构概览引导它用更精确的 pattern）
+        result_json = json.dumps(paginated_matches, ensure_ascii=False)
+        is_empty_pattern = not pattern or not pattern.strip()
+        is_too_large = len(result_json) > self.FALLBACK_MAX_CHARS
+
+        if is_empty_pattern or is_too_large:
+            reason = "empty_pattern" if is_empty_pattern else "result_too_large"
+            logger.info(f"触发降级: reason={reason}, chars={len(result_json)}")
+            # 对本页命中的 code_path 生成概览（不含 SQL 原文）
+            fallback_paths = [m["code_path"] for m in paginated_matches]
+            overviews = []
+            for cp in fallback_paths:
+                task_obj = cache.get(cp)
+                if not task_obj:
+                    continue
+                summary = summarize_sql(task_obj.get("sql_code", "") or "")
+                overviews.append({
+                    "code_path": cp,
+                    "任务状态": task_obj.get("任务状态", "未知"),
+                    "lineage_type": task_obj.get("lineage_type", ""),
+                    "parse_ok": summary["parse_ok"],
+                    "statement_count": summary["statement_count"],
+                    "statements": summary["statements"],
+                    "from_database_table": task_obj.get("from_database_table", []),
+                    "to_database_table": task_obj.get("to_database_table", []),
+                })
+            return {
+                "fallback": True,
+                "fallback_reason": reason,
+                "hint": (
+                    "查询返回内容过多，已用 SQL 结构概览代替原文。"
+                    "请使用更精确的 pattern（如具体表名、CTE 名、字段名、SQL 关键字）重新调用 sql 工具，"
+                    "或调用 sql_overview 工具查看任务结构。"
+                ),
+                "overview_count": len(overviews),
+                "overviews": overviews,
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": total_pages,
+                },
+            }
+
         return {
             "matches": paginated_matches,
             "pagination": {
@@ -485,6 +535,73 @@ class DataFactoryCodeSearch:
                 "total_pages": total_pages
             }
         }
+
+    # ========== SQL 结构概览（给降级路径用，不返回 SQL 原文）==========
+
+    def get_sql_overview(
+        self,
+        code_path: str,
+        code_status: str = "已上线",
+    ) -> Dict[str, Any]:
+        """生成匹配 code_path 的所有任务的 SQL 结构概览。
+
+        复用 search_sql_codes 的路径+状态过滤逻辑，但对每个任务用
+        utils.sql_overview.summarize_sql 提取结构信息，不返回 SQL 原文。
+
+        Args:
+            code_path: 路径筛选，同 search_sql_codes。
+            code_status: 状态过滤，同 search_sql_codes。
+
+        Returns:
+            {
+              "overviews": [
+                {
+                  "code_path": "...",
+                  "任务状态": "已上线",
+                  "parse_ok": True,
+                  "statement_count": 2,
+                  "statements": [ ... summarize_sql 的输出 ... ],
+                  "from_database_table": [...],  # 缓存里已有的输入表（血缘表）
+                  "to_database_table": [...],    # 缓存里已有的输出表（血缘表）
+                }, ...
+              ],
+              "count": int
+            }
+        """
+        self.ensure_cache()
+        cache, _, _ = self._snapshot.get()
+        logger.info(f"生成 SQL 概览: code_path={code_path}, code_status={code_status}")
+
+        # 路径 + 状态过滤（复用 search_sql_codes 的逻辑）
+        candidate_paths = [
+            p for p in cache.keys() if self._match_path(p, code_path)
+        ]
+        if code_status in ("已上线", "未上线"):
+            candidate_paths = [
+                cp for cp in candidate_paths
+                if cache.get(cp, {}).get("任务状态") == code_status
+            ]
+
+        overviews = []
+        for cp in candidate_paths:
+            task_obj = cache.get(cp)
+            if not task_obj:
+                continue
+            sql_code = task_obj.get("sql_code", "") or ""
+            summary = summarize_sql(sql_code)
+            overviews.append({
+                "code_path": cp,
+                "任务状态": task_obj.get("任务状态", "未知"),
+                "lineage_type": task_obj.get("lineage_type", ""),
+                "parse_ok": summary["parse_ok"],
+                "statement_count": summary["statement_count"],
+                "statements": summary["statements"],
+                "from_database_table": task_obj.get("from_database_table", []),
+                "to_database_table": task_obj.get("to_database_table", []),
+            })
+
+        logger.info(f"SQL 概览完成，共 {len(overviews)} 个任务")
+        return {"overviews": overviews, "count": len(overviews)}
 
     # ========== Task 5: 基于缓存实现 datafactory_task_info ==========
 
@@ -644,6 +761,42 @@ def datafactory_sql_search(
     if "error" in result:
         return f"错误: {result['error']}"
 
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@ds_search_mcp.tool(name="sql_overview")
+@log_function_info
+def datafactory_sql_overview(
+    code_path: str,
+    code_status: str = "已上线",
+) -> str:
+    """
+    数据工厂 SQL 结构概览工具
+
+    返回任务的 SQL 结构信息（输入表、输出表、CTE 名称及行号），**不返回 SQL 原文**。
+    适用于：快速了解任务的数据流向、定位某个 CTE 定义在哪一行、判断任务有几条语句。
+
+    典型应用场景：
+    - 想了解某个任务读了哪些表、写了哪张表 → 看 statements 里的 input_tables / output_table
+    - 想知道一个复杂任务有几层 CTE、各在哪一行 → 看 statements 里的 ctes 字段
+    - sql 工具提示「返回过多需用更精确 pattern」时 → 先用本工具看清结构再决定查哪一段
+
+    Args:
+        code_path: 路径筛选，同 sql 工具。如 "/ds/公共每日跑批/" 或关键词 "对公有效户"
+        code_status: 状态过滤，可选 "已上线"(默认)、"未上线"
+
+    Returns:
+        JSON 格式的概览，包含 overviews 列表，每条含：
+        - code_path: 任务路径
+        - parse_ok: 整体能否解析（脏 SQL 时为 false，但仍返回错误信息）
+        - statement_count: 语句条数
+        - statements: 每条语句的结构（index/type/input_tables/output_table/ctes/parse_error）
+        - from_database_table / to_database_table: 血缘表（缓存元数据，非解析所得）
+    """
+    result = ds_code_search.get_sql_overview(
+        code_path=code_path,
+        code_status=code_status,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
