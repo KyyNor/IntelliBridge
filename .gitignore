@@ -148,5 +148,6 @@ docker/.build.env
 .idea/
 cache/
 tests/spark_thrift/output/
+logs/spark_sql_report.json
 
 intelli_bridge.db

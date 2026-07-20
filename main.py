@@ -14,6 +14,7 @@ from tools.memory import memory_mcp
 from tools.ds_code_search import ds_search_mcp, DataFactoryCodeSearch
 from tools.ds_client import ds_mcp
 from tools.fine_cpt_search import fine_cpt_mcp
+from tools.spark_sql_analyzer import spark_analyzer
 from utils.config import config
 from utils.decorators import shutdown_call_log_writer
 from utils.hive_pool import hive_pool
@@ -101,12 +102,15 @@ def shutdown_resources() -> None:
     """Flush background work and close process-owned resources."""
 
     shutdown_call_log_writer()
+    spark_analyzer.stop()
     hive_pool.close()
     mysql_pool.close_all_pools()
 
 
 @asynccontextmanager
 async def combined_lifespan(application):
+    # 启动后台 Spark SQL 查询性能分析器（幂等，配置 enabled=false 时是空操作）
+    spark_analyzer.ensure_started()
     try:
         async with _mcp_lifespan(application):
             yield

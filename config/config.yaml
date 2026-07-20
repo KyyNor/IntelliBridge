@@ -81,6 +81,30 @@ dolphin_scheduler:
     - 公共每日跑批-分钟级任务
     - 数据标准化
 
+# Spark SQL 查询性能分析器配置
+# 数据源：Spark ThriftServer 的 Spark Web UI REST API（端口 4040）
+spark_sql_analyzer:
+  enabled: true
+  # ThriftServer 的 Spark Web UI 地址（4040 = spark.ui.port）
+  base_url: "http://localhost:4040"
+  # 拉取新查询的轮询间隔（秒）
+  poll_interval_seconds: 30
+  # 每次分析后覆盖写的报告文件路径（相对项目根目录）
+  report_path: "logs/spark_sql_report.json"
+  # diskcache 中保留的最大历史记录条数（超出按时间裁剪）
+  history_retention: 5000
+  # 慢查询阈值（SQL 级 duration，单位毫秒）
+  slow_query_ms: 30000
+  # 数据倾斜检测配置
+  skew:
+    enabled: true
+    # task 级 shuffle 字节 max/median 超过此比值判定倾斜
+    shuffle_skew_ratio: 4.0
+    # task 级 duration max/median 超过此比值判定倾斜
+    duration_skew_ratio: 4.0
+    # stage 的 task 数少于此值不判倾斜（样本太小，比值不可靠）
+    min_tasks_for_skew: 20
+
 fine_report:
   download_path: '/home/bdspk/hxb_dh/cache/intellibridge'
   browserless_download_path: '/home/bdspk/hxb_dh/cache/browserless_download'
