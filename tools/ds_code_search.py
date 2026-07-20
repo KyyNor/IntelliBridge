@@ -334,274 +334,325 @@ class DataFactoryCodeSearch:
     # 最大上下文行数限制，防止返回过多内容超出上下文范围
     MAX_TOTAL_CONTEXT_LINES = 100
 
-    # 返回内容字符数阈值：超过则触发降级，改返 SQL 概览 + 提示（不返原 SQL）。
-    # 空白 pattern 也会触发降级（空正则匹配每一行）。
-    FALLBACK_MAX_CHARS = 5000
+    # 起止行模式最多返回的行数。该模式用于读取代码，不走正则匹配。
+    MAX_RANGE_LINES = 100
+
+    # 单个任务最多返回的匹配行数。超过后只截断匹配结果，不改为 SQL 概览。
+    MAX_MATCHED_LINES = 100
+
+    def _normalize_exact_code_path(self, code_path: Optional[str]) -> str:
+        """规范化精确任务路径；允许忽略末尾斜杠。"""
+        if not code_path:
+            return ""
+        return code_path.strip().rstrip("/")
+
+    def _get_exact_task(
+        self,
+        cache: Dict[str, Dict],
+        code_path: Optional[str],
+    ) -> tuple[str, Optional[Dict]]:
+        """按完整 code_path 获取单个任务，不做模糊匹配。"""
+        normalized_path = self._normalize_exact_code_path(code_path)
+        if not normalized_path or normalized_path == "/ds":
+            return normalized_path, None
+        return normalized_path, cache.get(normalized_path)
+
+    def _build_task_overview(self, code_path: str, task_obj: Dict) -> Dict[str, Any]:
+        """构建单个任务的 SQL 结构概览，不返回 SQL 原文。"""
+        summary = summarize_sql(task_obj.get("sql_code", "") or "")
+        return {
+            "code_path": code_path,
+            "任务状态": task_obj.get("任务状态", "未知"),
+            "lineage_type": task_obj.get("lineage_type", ""),
+            "parse_ok": summary["parse_ok"],
+            "statement_count": summary["statement_count"],
+            "statements": summary["statements"],
+            "from_database_table": task_obj.get("from_database_table", []),
+            "to_database_table": task_obj.get("to_database_table", []),
+        }
+
+    def _build_empty_pattern_fallback(
+        self,
+        code_path: str,
+        task_obj: Dict,
+        page: int,
+        page_size: int,
+    ) -> Dict[str, Any]:
+        """返回空 pattern 的结构化结果，避免把整段 SQL 当作空正则返回。"""
+        return {
+            "fallback": True,
+            "fallback_reason": "empty_pattern",
+            "message": (
+                "因为 pattern 为空，无法确定需要查看的代码范围，所以只返回该任务的 SQL 结构概览。"
+                "如果需要查看更多代码，请提供更精确的 pattern，或指定 start_line 和 end_line。"
+            ),
+            "code_path": code_path,
+            "overview": self._build_task_overview(code_path, task_obj),
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": 1,
+                "total_pages": 1,
+            },
+        }
+
+    def _read_sql_range(
+        self,
+        cache: Dict[str, Dict],
+        code_path: Optional[str],
+        start_line: Optional[int],
+        end_line: Optional[int],
+        code_status: str,
+    ) -> Dict[str, Any]:
+        """读取精确任务的连续代码行，行号为 1-based 且包含首尾。"""
+        normalized_path, task_obj = self._get_exact_task(cache, code_path)
+        if task_obj is None:
+            return {
+                "matches": [],
+                "pagination": {},
+                "error": "code_path 必须是已存在的完整任务路径，例如 /ds/项目/工作流/任务",
+            }
+
+        if code_status in ("已上线", "未上线") and task_obj.get("任务状态") != code_status:
+            return {
+                "matches": [],
+                "pagination": {"page": 1, "page_size": 1, "total": 0, "total_pages": 0},
+            }
+
+        if start_line is None or end_line is None:
+            return {
+                "matches": [],
+                "pagination": {},
+                "error": "start_line 和 end_line 必须同时填写",
+            }
+
+        if (
+            isinstance(start_line, bool)
+            or isinstance(end_line, bool)
+            or not isinstance(start_line, int)
+            or not isinstance(end_line, int)
+        ):
+            return {
+                "matches": [],
+                "pagination": {},
+                "error": "start_line 和 end_line 必须是正整数",
+            }
+
+        if start_line < 1 or end_line < 1 or start_line > end_line:
+            return {
+                "matches": [],
+                "pagination": {},
+                "error": "start_line 和 end_line 必须是正整数，且 start_line <= end_line",
+            }
+
+        requested_lines = end_line - start_line + 1
+        if requested_lines > self.MAX_RANGE_LINES:
+            return {
+                "matches": [],
+                "pagination": {},
+                "error": f"单次最多读取 {self.MAX_RANGE_LINES} 行代码",
+            }
+
+        sql_lines = task_obj.get("sql_lines", [])
+        total_lines = len(sql_lines)
+        if start_line > total_lines:
+            return {
+                "matches": [],
+                "pagination": {"page": 1, "page_size": 1, "total": 0, "total_pages": 0},
+                "message": f"请求起始行 {start_line} 超出代码总行数 {total_lines}",
+            }
+
+        actual_end_line = min(end_line, total_lines)
+        context_lines = sql_lines[start_line - 1:actual_end_line]
+        match = {
+            "code_path": normalized_path,
+            "起始行": start_line,
+            "结束行": actual_end_line,
+            "行号": list(range(start_line, actual_end_line + 1)),
+            "代码片段": "\n".join(context_lines),
+            "任务状态": task_obj.get("任务状态", "未知"),
+            "lineage_type": task_obj.get("lineage_type", ""),
+            "from_database_table": task_obj.get("from_database_table", []),
+            "to_database_table": task_obj.get("to_database_table", []),
+        }
+        return {
+            "mode": "range",
+            "matches": [match],
+            "pagination": {"page": 1, "page_size": 1, "total": 1, "total_pages": 1},
+        }
 
     def search_sql_codes(
         self,
-        pattern: str,
-        code_path: str = "/ds/",
+        pattern: str = "",
+        code_path: Optional[str] = None,
         before: int = 0,
         after: int = 0,
         code_status: str = "已上线",
         page: int = 1,
-        page_size: int = 20
+        page_size: int = 20,
+        start_line: Optional[int] = None,
+        end_line: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
-        搜索 SQL 代码（基于内存缓存）
+        搜索或读取单个精确任务的 SQL 代码。
 
-        Args:
-            pattern: 正则表达式
-            code_path: 路径过滤（作为字符串前缀/包含匹配）
-            before: 匹配行前的行数（最大50行）
-            after: 匹配行后的行数（最大50行）
-            code_status: 状态过滤
-            page: 页码
-            page_size: 每页条数
-
-        Returns:
-            包含 matches 和 pagination 的字典
+        pattern 模式按行执行大小写不敏感的 regex 搜索；
+        start_line/end_line 模式读取指定的连续代码行，不执行 regex。
         """
-        # 限制上下文行数，总共最多100行
         before = max(before, 0)
         after = max(after, 0)
-        total = before + after
-        if total > self.MAX_TOTAL_CONTEXT_LINES:
-            # 按比例压缩到100行
-            scale = self.MAX_TOTAL_CONTEXT_LINES / total
+        context_total = before + after
+        if context_total > self.MAX_TOTAL_CONTEXT_LINES:
+            scale = self.MAX_TOTAL_CONTEXT_LINES / context_total
             before = int(before * scale)
             after = self.MAX_TOTAL_CONTEXT_LINES - before
 
-        # 限制 page_size 最多50
         page = max(1, page)
         page_size = min(max(page_size, 1), 50)
 
-        # 确保缓存已加载
         self.ensure_cache()
         cache, _, _ = self._snapshot.get()
-        logger.info(f"开始搜索: pattern={pattern}, code_path={code_path}, code_status={code_status}")
+        logger.info(
+            f"开始搜索: pattern={pattern}, code_path={code_path}, "
+            f"code_status={code_status}, start_line={start_line}, end_line={end_line}"
+        )
 
-        # 1. 通过路径过滤获取候选任务列表（直接在所有keys上做字符串匹配）
-        candidate_paths = [
-            p for p in cache.keys()
-            if self._match_path(p, code_path)
-        ]
+        # 起止行是直接读取代码的模式，不执行正则，也不触发空 pattern 回退。
+        if start_line is not None or end_line is not None:
+            if pattern and pattern.strip():
+                return {
+                    "matches": [],
+                    "pagination": {},
+                    "error": "start_line/end_line 行范围模式不能同时指定非空 pattern",
+                }
+            return self._read_sql_range(
+                cache=cache,
+                code_path=code_path,
+                start_line=start_line,
+                end_line=end_line,
+                code_status=code_status,
+            )
 
-        # 2. 应用状态过滤
-        if code_status == "已上线":
-            candidate_paths = [
-                cp for cp in candidate_paths
-                if cache.get(cp, {}).get("任务状态") == "已上线"
-            ]
-        elif code_status == "未上线":
-            candidate_paths = [
-                cp for cp in candidate_paths
-                if cache.get(cp, {}).get("任务状态") == "未上线"
-            ]
+        normalized_path, task_obj = self._get_exact_task(cache, code_path)
+        if task_obj is None:
+            return {
+                "matches": [],
+                "pagination": {},
+                "error": "code_path 必须是已存在的完整任务路径，例如 /ds/项目/工作流/任务",
+            }
 
-        # 3. 编译正则表达式（启用忽略大小写匹配）
+        if code_status in ("已上线", "未上线") and task_obj.get("任务状态") != code_status:
+            return {
+                "matches": [],
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": 0,
+                    "total_pages": 0,
+                },
+            }
+
+        # 空 pattern 直接返回单个任务的概览，不先执行空正则扫描整段 SQL。
+        if not pattern or not pattern.strip():
+            return self._build_empty_pattern_fallback(
+                code_path=normalized_path,
+                task_obj=task_obj,
+                page=page,
+                page_size=page_size,
+            )
+
         try:
             compiled_regex = regex.compile(pattern, flags=regex.IGNORECASE)
         except regex.error as e:
             logger.error(f"正则表达式编译失败: {e}")
-            return {"matches": [], "pagination": {}, "error": f"正则表达式错误: {e}"}
+            return {
+                "matches": [],
+                "pagination": {},
+                "error": f"正则表达式错误: {e}",
+            }
 
-        # 4. 在内存中进行正则匹配
-        task_matches = {}
+        sql_lines = task_obj.get("sql_lines", [])
+        matched_lines = []
+        regex_timed_out = False
+        truncated = False
 
-        for code_path_key in candidate_paths:
-            task_obj = cache.get(code_path_key)
-            if not task_obj:
-                continue
+        for line_num, line in enumerate(sql_lines, start=1):
+            try:
+                match = compiled_regex.search(line, timeout=self.REGEX_TIMEOUT)
+                if not match:
+                    continue
 
-            sql_lines = task_obj.get("sql_lines", [])
-            matched_lines = []
-
-            for line_num, line in enumerate(sql_lines, start=1):
-                try:
-                    match = compiled_regex.search(line)
-                    if match:
-                        # 提取上下文
-                        start_idx = max(0, line_num - 1 - before)
-                        end_idx = min(len(sql_lines), line_num - 1 + after + 1)
-                        context_lines = sql_lines[start_idx:end_idx]
-
-                        matched_lines.append({
-                            "行号": line_num,
-                            "代码片段": '\n'.join(context_lines)
-                        })
-                except regex.Timeout:
-                    logger.warning(f"正则匹配超时: {code_path_key}, 行 {line_num}")
+                if len(matched_lines) >= self.MAX_MATCHED_LINES:
+                    truncated = True
                     break
 
-            if matched_lines:
-                task_matches[code_path_key] = {
-                    "code_path": code_path_key,
-                    "任务状态": task_obj["任务状态"],
-                    "lineage_type": task_obj["lineage_type"],
-                    "matched_lines": matched_lines,
-                    "from_tables": task_obj.get("from_database_table", []),
-                    "to_tables": task_obj.get("to_database_table", [])
-                }
-
-        # 5. 转换为 matches 列表
-        matches = []
-        for cp, info in task_matches.items():
-            match_count = len(info["matched_lines"])
-
-            # 所有匹配行的上下文（每个匹配行都有自己前后文）
-            all_contexts = [
-                {
-                    "行号": m["行号"],
-                    "代码片段": m["代码片段"]
-                }
-                for m in info["matched_lines"]
-            ]
-
-            matches.append({
-                "code_path": cp,
-                "匹配行数": match_count,
-                "行号": [m["行号"] for m in info["matched_lines"]],
-                "所有匹配行上下文": all_contexts,  # 新增：全部匹配行的上下文
-                "代码片段": all_contexts[0]["代码片段"] if all_contexts else "",  # 保持兼容，只留第一个
-                "任务状态": info["任务状态"],
-                "lineage_type": info["lineage_type"],
-                "from_database_table": info["from_tables"],
-                "to_database_table": info["to_tables"]
-            })
-
-        logger.info(f"正则匹配完成，共找到 {len(matches)} 个任务包含匹配")
-
-        # 6. 分页处理
-        total = len(matches)
-        total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-
-        paginated_matches = matches[start_idx:end_idx]
-
-        # 7. 降级判断：pattern 为空 或 返回内容过大 → 不返原 SQL，改返概览 + 提示
-        #    （原 SQL 内容太长时 agent 根本看不到，不如直接给结构概览引导它用更精确的 pattern）
-        result_json = json.dumps(paginated_matches, ensure_ascii=False)
-        is_empty_pattern = not pattern or not pattern.strip()
-        is_too_large = len(result_json) > self.FALLBACK_MAX_CHARS
-
-        if is_empty_pattern or is_too_large:
-            reason = "empty_pattern" if is_empty_pattern else "result_too_large"
-            logger.info(f"触发降级: reason={reason}, chars={len(result_json)}")
-            # 对本页命中的 code_path 生成概览（不含 SQL 原文）
-            fallback_paths = [m["code_path"] for m in paginated_matches]
-            overviews = []
-            for cp in fallback_paths:
-                task_obj = cache.get(cp)
-                if not task_obj:
-                    continue
-                summary = summarize_sql(task_obj.get("sql_code", "") or "")
-                overviews.append({
-                    "code_path": cp,
-                    "任务状态": task_obj.get("任务状态", "未知"),
-                    "lineage_type": task_obj.get("lineage_type", ""),
-                    "parse_ok": summary["parse_ok"],
-                    "statement_count": summary["statement_count"],
-                    "statements": summary["statements"],
-                    "from_database_table": task_obj.get("from_database_table", []),
-                    "to_database_table": task_obj.get("to_database_table", []),
+                start_idx = max(0, line_num - 1 - before)
+                end_idx = min(len(sql_lines), line_num - 1 + after + 1)
+                context_lines = sql_lines[start_idx:end_idx]
+                matched_lines.append({
+                    "行号": line_num,
+                    "代码片段": "\n".join(context_lines),
                 })
-            return {
-                "fallback": True,
-                "fallback_reason": reason,
-                "hint": (
-                    "查询返回内容过多，已用 SQL 结构概览代替原文。"
-                    "请使用更精确的 pattern（如具体表名、CTE 名、字段名、SQL 关键字）重新调用 sql 工具，"
-                    "或调用 sql_overview 工具查看任务结构。"
-                ),
-                "overview_count": len(overviews),
-                "overviews": overviews,
+            except TimeoutError:
+                logger.warning(f"正则匹配超时: {normalized_path}, 行 {line_num}")
+                regex_timed_out = True
+                break
+
+        if not matched_lines:
+            result = {
+                "matches": [],
                 "pagination": {
-                    "page": page,
-                    "page_size": page_size,
-                    "total": total,
-                    "total_pages": total_pages,
+                    "page": 1,
+                    "page_size": 1,
+                    "total": 0,
+                    "total_pages": 0,
                 },
             }
+            if regex_timed_out:
+                result.update({
+                    "regex_timeout": True,
+                    "message": "正则匹配超过 5 秒，已停止继续搜索；请简化 pattern。",
+                })
+            return result
 
-        return {
-            "matches": paginated_matches,
-            "pagination": {
-                "page": page,
-                "page_size": page_size,
-                "total": total,
-                "total_pages": total_pages
-            }
-        }
-
-    # ========== SQL 结构概览（给降级路径用，不返回 SQL 原文）==========
-
-    def get_sql_overview(
-        self,
-        code_path: str,
-        code_status: str = "已上线",
-    ) -> Dict[str, Any]:
-        """生成匹配 code_path 的所有任务的 SQL 结构概览。
-
-        复用 search_sql_codes 的路径+状态过滤逻辑，但对每个任务用
-        utils.sql_overview.summarize_sql 提取结构信息，不返回 SQL 原文。
-
-        Args:
-            code_path: 路径筛选，同 search_sql_codes。
-            code_status: 状态过滤，同 search_sql_codes。
-
-        Returns:
-            {
-              "overviews": [
-                {
-                  "code_path": "...",
-                  "任务状态": "已上线",
-                  "parse_ok": True,
-                  "statement_count": 2,
-                  "statements": [ ... summarize_sql 的输出 ... ],
-                  "from_database_table": [...],  # 缓存里已有的输入表（血缘表）
-                  "to_database_table": [...],    # 缓存里已有的输出表（血缘表）
-                }, ...
-              ],
-              "count": int
-            }
-        """
-        self.ensure_cache()
-        cache, _, _ = self._snapshot.get()
-        logger.info(f"生成 SQL 概览: code_path={code_path}, code_status={code_status}")
-
-        # 路径 + 状态过滤（复用 search_sql_codes 的逻辑）
-        candidate_paths = [
-            p for p in cache.keys() if self._match_path(p, code_path)
+        all_contexts = [
+            {"行号": item["行号"], "代码片段": item["代码片段"]}
+            for item in matched_lines
         ]
-        if code_status in ("已上线", "未上线"):
-            candidate_paths = [
-                cp for cp in candidate_paths
-                if cache.get(cp, {}).get("任务状态") == code_status
-            ]
-
-        overviews = []
-        for cp in candidate_paths:
-            task_obj = cache.get(cp)
-            if not task_obj:
-                continue
-            sql_code = task_obj.get("sql_code", "") or ""
-            summary = summarize_sql(sql_code)
-            overviews.append({
-                "code_path": cp,
-                "任务状态": task_obj.get("任务状态", "未知"),
-                "lineage_type": task_obj.get("lineage_type", ""),
-                "parse_ok": summary["parse_ok"],
-                "statement_count": summary["statement_count"],
-                "statements": summary["statements"],
-                "from_database_table": task_obj.get("from_database_table", []),
-                "to_database_table": task_obj.get("to_database_table", []),
+        match_result = {
+            "code_path": normalized_path,
+            "匹配行数": len(matched_lines),
+            "行号": [item["行号"] for item in matched_lines],
+            "所有匹配行上下文": all_contexts,
+            "代码片段": all_contexts[0]["代码片段"],
+            "任务状态": task_obj.get("任务状态", "未知"),
+            "lineage_type": task_obj.get("lineage_type", ""),
+            "from_database_table": task_obj.get("from_database_table", []),
+            "to_database_table": task_obj.get("to_database_table", []),
+        }
+        if truncated:
+            match_result.update({
+                "截断": True,
+                "提示": (
+                    f"该 pattern 命中行数超过 {self.MAX_MATCHED_LINES} 行，"
+                    "只返回前面的匹配结果；如需查看更多，请使用更精确的 pattern 或 start_line/end_line。"
+                ),
+            })
+        if regex_timed_out:
+            match_result.update({
+                "正则超时": True,
+                "提示": "正则匹配超过 5 秒，已停止继续搜索；请简化 pattern。",
             })
 
-        logger.info(f"SQL 概览完成，共 {len(overviews)} 个任务")
-        return {"overviews": overviews, "count": len(overviews)}
+        return {
+            "matches": [match_result],
+            "pagination": {
+                "page": 1,
+                "page_size": 1,
+                "total": 1,
+                "total_pages": 1,
+            },
+        }
 
     # ========== Task 5: 基于缓存实现 datafactory_task_info ==========
 
@@ -631,14 +682,17 @@ class DataFactoryCodeSearch:
         if not code_path and not from_table and not to_table:
             return [{"error": "请至少填写一个筛选条件"}]
 
-        # 获取候选任务列表
-        candidate_paths = set()
+        # 获取候选任务列表。None 表示尚未应用任何筛选条件，
+        # 空 set 则表示某个筛选条件已经明确没有命中，二者不能混淆。
+        candidate_paths = None
 
         # 1. 按路径过滤（直接字符串匹配）
         if code_path:
-            for path in cache.keys():
-                if self._match_path(path, code_path):
-                    candidate_paths.add(path)
+            path_candidates = {
+                path for path in cache.keys()
+                if self._match_path(path, code_path)
+            }
+            candidate_paths = path_candidates
 
         # 2. 按输入表过滤（regex 直接匹配，忽略大小写）
         if from_table:
@@ -649,7 +703,7 @@ class DataFactoryCodeSearch:
                 # 直接在整个表名上用 regex 匹配
                 if pattern.search(table):
                     temp.update(paths)
-            candidate_paths = candidate_paths.intersection(temp) if candidate_paths else temp
+            candidate_paths = temp if candidate_paths is None else candidate_paths.intersection(temp)
 
         # 3. 按输出表过滤（regex 直接匹配，忽略大小写）
         if to_table:
@@ -659,7 +713,7 @@ class DataFactoryCodeSearch:
             for table, paths in index_by_to_table.items():
                 if pattern.search(table):
                     temp.update(paths)
-            candidate_paths = candidate_paths.intersection(temp) if candidate_paths else temp
+            candidate_paths = temp if candidate_paths is None else candidate_paths.intersection(temp)
 
         # 重要修正：如果传入了筛选条件但没匹配到，应该返回空，不要返回全量！
         # 这样用户才能知道自己的查询条件没有命中
@@ -669,14 +723,12 @@ class DataFactoryCodeSearch:
 
         # 构建返回结果
         tasks = []
-        for code_path_key in candidate_paths:
+        for code_path_key in sorted(candidate_paths):
             task_obj = cache.get(code_path_key)
             if not task_obj:
                 continue
 
-            # 截取前1000个字符
             sql_code = task_obj.get("sql_code", "") or ""
-            code_preview = sql_code[:1000]
             total_lines = len(sql_code.split('\n'))
 
             # 仅在白名单内的 lineage_type 才追加数据源相关字段
@@ -685,11 +737,11 @@ class DataFactoryCodeSearch:
             task_result = {
                 "code_path": code_path_key,
                 "任务类型": lineage_type,
-                "代码": code_preview,
                 "代码行数": total_lines,
                 "任务状态": task_obj.get("任务状态", "未知"),
                 "输入表清单": task_obj.get("from_database_table", []),
                 "输出表清单": task_obj.get("to_database_table", []),
+                "sql_overview": self._build_task_overview(code_path_key, task_obj),
             }
 
             if lineage_type in self.DATASOURCE_TYPES:
@@ -714,39 +766,42 @@ ds_code_search = DataFactoryCodeSearch()
 @ds_search_mcp.tool(name="sql")
 @log_function_info
 def datafactory_sql_search(
-    pattern: str,
-    code_path: str = "/ds/",
+    code_path: str,
+    pattern: str = "",
     before: int = 0,
     after: int = 0,
     code_status: str = "已上线",
     page: int = 1,
-    page_size: int = 20
+    page_size: int = 20,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
 ) -> str:
     """
     数据工厂代码检索工具
 
-    在任务代码中进行正则检索，快速找到包含特定 SQL 的代码段。
+    在单个精确任务中进行正则检索，或读取指定起止行的代码。
 
     典型应用场景：
-    - 想看看某个项目中哪些任务使用了某张表（如 FROM dim_xxx）
-    - 想找包含特定 SQL 模式的任务（如 JOIN、窗口函数 INSERT INTO 等）
+    - 想查看某个已知任务中包含特定 SQL 模式的代码（如 JOIN、窗口函数、INSERT INTO）
     - 想查看某段代码的上下文（前后几行的代码）
+    - 想直接查看某个任务的第 100-110 行
 
     Args:
-        pattern: 正则表达式，用于匹配代码中的特定模式，如 "FROM\\s+\\w+"、"JOIN\\s+\\w+"、"INSERT\\s+INTO" 等
-        code_path: 路径筛选，限定搜索范围，支持：
-                   - 前缀匹配：如 "/ds/公共每日跑批/" 搜索该目录下所有任务
-                   - 关键词匹配：如 "对公有效户" 会匹配路径中任意层级包含该关键词的任务
+        code_path: 必填，完整且精确的任务路径，如 "/ds/项目/工作流/任务"
+        pattern: 正则表达式，用于匹配代码中的特定模式，如 "FROM\\s+\\w+"、"JOIN\\s+\\w+"、"INSERT\\s+INTO" 等。
+                普通检索模式下为空会返回该任务的 SQL 结构概览。
         before: 整数，匹配行往前显示的行数，用于查看上下文（可选，默认0，最大50行）
         after: 整数，匹配行往后显示的行数，用于查看上下文（可选，默认0，最大50行，总计不超过100行）
         code_status: 状态过滤，可选 "已上线"(默认)、"未上线"，只会返回相应状态的任务
-        page: 页码，从1开始（可选，默认1）
-        page_size: 每页返回的任务数，默认20条，最多50（可选）
+        page/page_size: 保留分页字段兼容性；精确路径模式下最多返回一个任务
+        start_line: 起始行号，和 end_line 同时填写时读取连续代码，不执行 pattern（1-based）
+        end_line: 结束行号，包含该行；单次最多读取100行
 
     Returns:
         JSON 格式的搜索结果，包含：
-        - matches: 匹配的任務列表，每条包含 code_path、行号、代码片段、上下游表信息等
-        - pagination: 分页信息（page、page_size、total、total_pages）
+        - matches: 匹配或读取到的代码片段
+        - fallback: pattern 为空时返回的 SQL 结构概览及原因说明
+        - pagination: 兼容性分页信息
     """
     result = ds_code_search.search_sql_codes(
         pattern=pattern,
@@ -755,48 +810,14 @@ def datafactory_sql_search(
         after=after,
         code_status=code_status,
         page=page,
-        page_size=page_size
+        page_size=page_size,
+        start_line=start_line,
+        end_line=end_line,
     )
 
     if "error" in result:
         return f"错误: {result['error']}"
 
-    return json.dumps(result, ensure_ascii=False, indent=2)
-
-
-@ds_search_mcp.tool(name="sql_overview")
-@log_function_info
-def datafactory_sql_overview(
-    code_path: str,
-    code_status: str = "已上线",
-) -> str:
-    """
-    数据工厂 SQL 结构概览工具
-
-    返回任务的 SQL 结构信息（输入表、输出表、CTE 名称及行号），**不返回 SQL 原文**。
-    适用于：快速了解任务的数据流向、定位某个 CTE 定义在哪一行、判断任务有几条语句。
-
-    典型应用场景：
-    - 想了解某个任务读了哪些表、写了哪张表 → 看 statements 里的 input_tables / output_table
-    - 想知道一个复杂任务有几层 CTE、各在哪一行 → 看 statements 里的 ctes 字段
-    - sql 工具提示「返回过多需用更精确 pattern」时 → 先用本工具看清结构再决定查哪一段
-
-    Args:
-        code_path: 路径筛选，同 sql 工具。如 "/ds/公共每日跑批/" 或关键词 "对公有效户"
-        code_status: 状态过滤，可选 "已上线"(默认)、"未上线"
-
-    Returns:
-        JSON 格式的概览，包含 overviews 列表，每条含：
-        - code_path: 任务路径
-        - parse_ok: 整体能否解析（脏 SQL 时为 false，但仍返回错误信息）
-        - statement_count: 语句条数
-        - statements: 每条语句的结构（index/type/input_tables/output_table/ctes/parse_error）
-        - from_database_table / to_database_table: 血缘表（缓存元数据，非解析所得）
-    """
-    result = ds_code_search.get_sql_overview(
-        code_path=code_path,
-        code_status=code_status,
-    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -810,11 +831,11 @@ def datafactory_task_info(
     """
     数据工厂DolphinScheduler 任务详情查询工具
 
-    查询任务的详细信息，包括任务代码、上下游表清单、任务状态等。
+    查询任务的详细信息，包括 SQL 结构概览、上下游表清单、任务状态等。
     常用于了解某个任务的用途、数据来源和数据去向。
 
     典型应用场景：
-    - 想知道某个任务是做什么的、代码长什么样 → 用 code_path 查询
+    - 想知道某个任务有几条 SQL、有哪些输入输出表、CTE 在哪几行 → 用 code_path 查询
     - 想知道哪些任务用了某张表作为输入 → 用 from_table 查询
     - 想知道哪些任务产出了某张表（下游是谁）→ 用 to_table 查询
     - 想追踪某一类数据的完整链路 → 结合多个参数联合查询
@@ -830,7 +851,7 @@ def datafactory_task_info(
         JSON 格式的任务详情列表，每个元素包含：
         - code_path: 任务完整路径
         - 任务类型：SQL / SHELL_SQL / SHELL_SQOOP / SHELL_TRINO_SYNC
-        - 代码：任务的前100行代码
+        - sql_overview：SQL 解析得到的语句类型、输入表、输出表、CTE 及行号；不返回 SQL 原文
         - 代码行数：总行数
         - 任务状态：已上线/未上线
         - 输入表清单：该任务依赖的输入表列表

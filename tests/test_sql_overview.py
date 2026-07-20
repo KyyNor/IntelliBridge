@@ -1,10 +1,10 @@
-"""tests for utils.sql_overview and the ds_code_search fallback path.
+"""tests for utils.sql_overview and the ds_code_search code-reading paths.
 
 Covers:
 - summarize_sql: INSERT+CTE, multi-statement, nested CTE, CREATE TEMPORARY,
   dirty SQL (parse_error), CTE line numbers, CTE-reference exclusion.
-- search_sql_codes fallback: empty pattern and oversized result both trigger
-  the overview+hint response (no original SQL returned).
+- search_sql_codes: exact-path regex matching, empty-pattern overview fallback,
+  range reads, truncation and regex timeout protection.
 """
 
 import sys
@@ -157,29 +157,26 @@ class SummarizeSqlEdgeTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# search_sql_codes 降级路径测试（注入假缓存，不依赖数据库）
+# search_sql_codes 测试（注入假缓存，不依赖数据库）
 # ---------------------------------------------------------------------------
 
-class SearchFallbackTests(unittest.TestCase):
-    """空 pattern 或返回过大 → 返回概览 + 提示，不返原 SQL。"""
+class SearchSqlTests(unittest.TestCase):
+    """覆盖精确路径、正则检索、空 pattern 回退和行范围读取。"""
 
     def _make_instance_with_cache(self, tasks):
-        """构造一个 DataFactoryCodeSearch 实例，缓存已注入 tasks。
-
-        tasks: {code_path: {sql_code, 任务状态, from_database_table, to_database_table, lineage_type}}
-        """
         from tools.ds_code_search import DataFactoryCodeSearch
 
         inst = DataFactoryCodeSearch()
         cache = {}
-        for path, t in tasks.items():
+        for path, task in tasks.items():
+            sql_code = task.get("sql_code", "")
             cache[path] = {
-                "sql_code": t.get("sql_code", ""),
-                "sql_lines": t.get("sql_code", "").split("\n"),
-                "任务状态": t.get("任务状态", "已上线"),
-                "lineage_type": t.get("lineage_type", "SQL"),
-                "from_database_table": t.get("from_database_table", []),
-                "to_database_table": t.get("to_database_table", []),
+                "sql_code": sql_code,
+                "sql_lines": sql_code.split("\n"),
+                "任务状态": task.get("任务状态", "已上线"),
+                "lineage_type": task.get("lineage_type", "SQL"),
+                "from_database_table": task.get("from_database_table", []),
+                "to_database_table": task.get("to_database_table", []),
                 "project_name": "proj",
                 "process_name": "proc",
                 "task_name": path.rsplit("/", 1)[-1],
@@ -187,130 +184,207 @@ class SearchFallbackTests(unittest.TestCase):
                 "task_status": "1",
             }
         inst._snapshot.replace((cache, {}, {}))
-        inst._cache_loaded = True  # 跳过 load_cache
-        return inst
-
-    def test_empty_pattern_triggers_fallback_with_hint(self):
-        inst = self._make_instance_with_cache({
-            "/ds/p/proc/taskA": {
-                "sql_code": "INSERT INTO dws.a SELECT * FROM ods.x",
-            }
-        })
-        result = inst.search_sql_codes(pattern="", code_path="/ds/")
-        self.assertTrue(result["fallback"])
-        self.assertEqual(result["fallback_reason"], "empty_pattern")
-        self.assertIn("更精确", result["hint"])
-        # 概览里有这个任务，且不含 SQL 原文
-        self.assertEqual(result["overview_count"], 1)
-        ov = result["overviews"][0]
-        self.assertEqual(ov["code_path"], "/ds/p/proc/taskA")
-        self.assertNotIn("sql_code", ov)
-        self.assertNotIn("代码片段", ov)
-        # 但有结构信息
-        self.assertTrue(ov["parse_ok"])
-        self.assertEqual(ov["statement_count"], 1)
-
-    def test_whitespace_only_pattern_triggers_fallback(self):
-        inst = self._make_instance_with_cache({
-            "/ds/p/proc/taskA": {"sql_code": "SELECT 1"},
-        })
-        result = inst.search_sql_codes(pattern="   ", code_path="/ds/")
-        self.assertTrue(result["fallback"])
-        self.assertEqual(result["fallback_reason"], "empty_pattern")
-
-    def test_oversized_result_triggers_fallback(self):
-        # 构造一个会命中很多行的大 SQL（空格分隔，让每个 token 都是匹配行）
-        big_lines = "\n".join(f"SELECT col_{i} FROM ods.big" for i in range(500))
-        big_sql = f"INSERT INTO dws.big\n{big_lines}"
-        inst = self._make_instance_with_cache({
-            "/ds/p/proc/bigTask": {"sql_code": big_sql},
-        })
-        # pattern 命中每行（SELECT 出现在每行）→ 返回内容超阈值
-        result = inst.search_sql_codes(pattern="SELECT", code_path="/ds/")
-        self.assertTrue(result["fallback"])
-        self.assertEqual(result["fallback_reason"], "result_too_large")
-        # 不返原 SQL
-        blob = str(result)
-        self.assertNotIn("col_499", blob)  # 原 SQL 里的内容不该出现
-
-    def test_normal_pattern_does_not_trigger_fallback(self):
-        inst = self._make_instance_with_cache({
-            "/ds/p/proc/taskA": {"sql_code": "INSERT INTO dws.a SELECT id FROM ods.x"},
-        })
-        result = inst.search_sql_codes(pattern="ods.x", code_path="/ds/")
-        self.assertNotIn("fallback", result)
-        self.assertIn("matches", result)
-        self.assertEqual(len(result["matches"]), 1)
-
-    def test_fallback_overview_includes_cte_lines(self):
-        sql = (
-            "INSERT INTO dws.a\n"
-            "WITH cte_x AS (\n"
-            "    SELECT id FROM ods.src\n"
-            ")\n"
-            "SELECT * FROM cte_x"
-        )
-        inst = self._make_instance_with_cache({
-            "/ds/p/proc/taskCte": {"sql_code": sql},
-        })
-        result = inst.search_sql_codes(pattern="", code_path="/ds/")
-        ov = result["overviews"][0]
-        stmt = ov["statements"][0]
-        self.assertEqual(stmt["ctes"], [{"name": "cte_x", "line": 2}])
-
-
-# ---------------------------------------------------------------------------
-# get_sql_overview 方法测试
-# ---------------------------------------------------------------------------
-
-class GetSqlOverviewTests(unittest.TestCase):
-    """get_sql_overview：路径+状态过滤 + 概览生成。"""
-
-    def _make_instance_with_cache(self, tasks):
-        from tools.ds_code_search import DataFactoryCodeSearch
-        inst = DataFactoryCodeSearch()
-        cache = {}
-        for path, t in tasks.items():
-            cache[path] = {
-                "sql_code": t.get("sql_code", ""),
-                "sql_lines": t.get("sql_code", "").split("\n"),
-                "任务状态": t.get("任务状态", "已上线"),
-                "lineage_type": t.get("lineage_type", "SQL"),
-                "from_database_table": t.get("from_database_table", []),
-                "to_database_table": t.get("to_database_table", []),
-            }
-        inst._snapshot.replace((cache, {}, {}))
         inst._cache_loaded = True
         return inst
 
-    def test_overview_filters_by_path_and_status(self):
+    def test_empty_pattern_returns_overview_with_reason(self):
+        path = "/ds/p/proc/taskA"
         inst = self._make_instance_with_cache({
-            "/ds/projA/proc/task1": {
-                "sql_code": "INSERT INTO dws.a SELECT * FROM ods.x",
-                "任务状态": "已上线",
-            },
-            "/ds/projB/proc/task2": {
-                "sql_code": "INSERT INTO dws.b SELECT * FROM ods.y",
-                "任务状态": "未上线",
-            },
+            path: {"sql_code": "INSERT INTO dws.a SELECT * FROM ods.x"},
         })
-        # 只看 projA 已上线
-        r = inst.get_sql_overview(code_path="/ds/projA/", code_status="已上线")
-        self.assertEqual(r["count"], 1)
-        self.assertEqual(r["overviews"][0]["code_path"], "/ds/projA/proc/task1")
+        result = inst.search_sql_codes(pattern="", code_path=path)
+        self.assertTrue(result["fallback"])
+        self.assertEqual(result["fallback_reason"], "empty_pattern")
+        self.assertIn("因为 pattern 为空", result["message"])
+        self.assertIn("更精确", result["message"])
+        self.assertEqual(result["overview"]["code_path"], path)
+        self.assertTrue(result["overview"]["parse_ok"])
+        self.assertNotIn("sql_code", result["overview"])
 
-    def test_overview_does_not_return_sql_raw(self):
+    def test_whitespace_only_pattern_returns_overview(self):
+        path = "/ds/p/proc/taskA"
         inst = self._make_instance_with_cache({
-            "/ds/p/proc/t": {
-                "sql_code": "INSERT INTO dws.a SELECT * FROM ods.secret_table_xyz",
+            path: {"sql_code": "SELECT 1"},
+        })
+        result = inst.search_sql_codes(pattern="   ", code_path=path)
+        self.assertTrue(result["fallback"])
+        self.assertEqual(result["fallback_reason"], "empty_pattern")
+
+    def test_fuzzy_code_path_is_rejected_by_sql(self):
+        inst = self._make_instance_with_cache({
+            "/ds/p/proc/taskA": {"sql_code": "SELECT 1"},
+        })
+        result = inst.search_sql_codes(pattern="SELECT", code_path="/ds/p/")
+        self.assertIn("error", result)
+        self.assertIn("完整任务路径", result["error"])
+
+    def test_regex_pattern_matches_case_insensitively_with_context(self):
+        path = "/ds/p/proc/taskA"
+        sql = (
+            "INSERT INTO dws.a\n"
+            "SELECT id\n"
+            "FROM ods.foo\n"
+            "JOIN ods.bar ON foo.id = bar.id\n"
+            "WHERE dt = '2026-07-20'"
+        )
+        inst = self._make_instance_with_cache({path: {"sql_code": sql}})
+        result = inst.search_sql_codes(
+            pattern=r"from\s+ods\.foo",
+            code_path=path,
+            before=1,
+            after=1,
+        )
+        self.assertNotIn("error", result)
+        self.assertEqual(result["matches"][0]["行号"], [3])
+        self.assertIn("SELECT id", result["matches"][0]["代码片段"])
+        self.assertIn("JOIN ods.bar", result["matches"][0]["代码片段"])
+
+    def test_regex_invalid_pattern_returns_error(self):
+        path = "/ds/p/proc/taskA"
+        inst = self._make_instance_with_cache({
+            path: {"sql_code": "SELECT 1"},
+        })
+        result = inst.search_sql_codes(pattern="(", code_path=path)
+        self.assertIn("error", result)
+        self.assertIn("正则表达式错误", result["error"])
+
+    def test_wide_pattern_is_truncated_not_overview_fallback(self):
+        path = "/ds/p/proc/bigTask"
+        sql = "\n".join(f"SELECT col_{i} FROM ods.big" for i in range(150))
+        inst = self._make_instance_with_cache({path: {"sql_code": sql}})
+        result = inst.search_sql_codes(pattern="SELECT", code_path=path)
+        self.assertNotIn("fallback", result)
+        match = result["matches"][0]
+        self.assertTrue(match["截断"])
+        self.assertEqual(len(match["行号"]), 100)
+        self.assertNotIn("col_149", str(result))
+
+    def test_range_mode_reads_requested_lines_without_pattern_fallback(self):
+        path = "/ds/p/proc/taskA"
+        sql = "\n".join(f"line_{i}" for i in range(1, 121))
+        inst = self._make_instance_with_cache({path: {"sql_code": sql}})
+        result = inst.search_sql_codes(
+            code_path=path,
+            start_line=100,
+            end_line=110,
+        )
+        self.assertNotIn("fallback", result)
+        self.assertEqual(result["mode"], "range")
+        match = result["matches"][0]
+        self.assertEqual(match["起始行"], 100)
+        self.assertEqual(match["结束行"], 110)
+        self.assertEqual(match["行号"], list(range(100, 111)))
+        self.assertEqual(match["代码片段"].splitlines()[0], "line_100")
+        self.assertEqual(match["代码片段"].splitlines()[-1], "line_110")
+
+    def test_range_mode_rejects_nonempty_pattern(self):
+        path = "/ds/p/proc/taskA"
+        inst = self._make_instance_with_cache({
+            path: {"sql_code": "line_1\nline_2"},
+        })
+        result = inst.search_sql_codes(
+            pattern="SELECT",
+            code_path=path,
+            start_line=1,
+            end_line=2,
+        )
+        self.assertIn("error", result)
+        self.assertIn("不能同时指定", result["error"])
+
+    def test_range_mode_validates_and_limits_lines(self):
+        path = "/ds/p/proc/taskA"
+        inst = self._make_instance_with_cache({
+            path: {"sql_code": "line_1\nline_2"},
+        })
+        bad_order = inst.search_sql_codes(
+            code_path=path, start_line=2, end_line=1
+        )
+        self.assertIn("error", bad_order)
+        too_many = inst.search_sql_codes(
+            code_path=path, start_line=1, end_line=101
+        )
+        self.assertIn("error", too_many)
+        self.assertIn("最多读取 100 行", too_many["error"])
+
+    def test_regex_timeout_is_reported(self):
+        path = "/ds/p/proc/slowTask"
+        inst = self._make_instance_with_cache({
+            path: {"sql_code": "a" * 50000 + "!"},
+        })
+        inst.REGEX_TIMEOUT = 0.001
+        result = inst.search_sql_codes(pattern=r"(a+)+$", code_path=path)
+        self.assertTrue(result.get("regex_timeout"))
+        self.assertIn("超过 5 秒", result["message"])
+
+
+# ---------------------------------------------------------------------------
+# task_info 测试
+# ---------------------------------------------------------------------------
+
+class TaskInfoTests(unittest.TestCase):
+    def _make_instance_with_cache(self, tasks, from_index=None, to_index=None):
+        from tools.ds_code_search import DataFactoryCodeSearch
+
+        inst = DataFactoryCodeSearch()
+        cache = {}
+        for path, task in tasks.items():
+            sql_code = task.get("sql_code", "")
+            cache[path] = {
+                "sql_code": sql_code,
+                "sql_lines": sql_code.split("\n"),
+                "任务状态": task.get("任务状态", "已上线"),
+                "lineage_type": task.get("lineage_type", "SQL"),
+                "from_database_table": task.get("from_database_table", []),
+                "to_database_table": task.get("to_database_table", []),
+                "from_source": task.get("from_source"),
+                "from_host": task.get("from_host"),
+                "to_source": task.get("to_source"),
+                "to_host": task.get("to_host"),
+            }
+        inst._snapshot.replace((cache, from_index or {}, to_index or {}))
+        inst._cache_loaded = True
+        return inst
+
+    def test_returns_sql_overview_instead_of_fixed_prefix(self):
+        path = "/ds/p/proc/taskA"
+        inst = self._make_instance_with_cache({
+            path: {
+                "sql_code": "SELECT id FROM ods.x\nWHERE dt = '2026-07-20'",
             }
         })
-        r = inst.get_sql_overview(code_path="/ds/")
-        blob = str(r)
-        # 原 SQL 的表名不该出现在概览里（secret_table_xyz 是输入表，会出现在 input_tables，
-        # 但这是结构信息不是原文）。这里验证「代码片段」字段不存在。
-        self.assertNotIn("代码片段", r["overviews"][0])
-        self.assertNotIn("sql_code", r["overviews"][0])
+        result = inst.query_task_info(code_path="taskA")
+        self.assertEqual(len(result), 1)
+        task = result[0]
+        self.assertNotIn("代码", task)
+        self.assertIn("sql_overview", task)
+        self.assertTrue(task["sql_overview"]["parse_ok"])
+        self.assertEqual(task["代码行数"], 2)
+
+    def test_multiple_filters_keep_and_semantics_when_intersection_is_empty(self):
+        path_a = "/ds/p/proc/taskA"
+        path_b = "/ds/p/proc/taskB"
+        inst = self._make_instance_with_cache(
+            {
+                path_a: {
+                    "sql_code": "SELECT 1",
+                    "from_database_table": ["ods.x"],
+                    "to_database_table": ["dws.a"],
+                },
+                path_b: {
+                    "sql_code": "SELECT 2",
+                    "from_database_table": ["ods.x"],
+                    "to_database_table": ["dws.b"],
+                },
+            },
+            from_index={"ods.x": [path_a, path_b]},
+            to_index={"dws.a": [path_a], "dws.b": [path_b]},
+        )
+        result = inst.query_task_info(
+            code_path="taskA",
+            from_table="ods.x",
+            to_table="dws.b",
+        )
+        self.assertEqual(result, [])
 
 
 if __name__ == "__main__":
