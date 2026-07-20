@@ -24,6 +24,8 @@ class DataFactoryCodeSearch:
 
     MAX_LIMIT = 1000
     DEFAULT_PAGE_SIZE = 50
+    TASK_INFO_DEFAULT_PAGE_SIZE = 20
+    TASK_INFO_MAX_PAGE_SIZE = 50
     REGEX_TIMEOUT = 5  # 秒
     CACHE_REFRESH_INTERVAL = 8 * 60 * 60  # 8小时 = 28800秒
 
@@ -660,8 +662,10 @@ class DataFactoryCodeSearch:
         self,
         code_path: Optional[str] = None,
         from_table: Optional[str] = None,
-        to_table: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        to_table: Optional[str] = None,
+        page: int = 1,
+        page_size: int = TASK_INFO_DEFAULT_PAGE_SIZE,
+    ) -> Dict[str, Any]:
         """
         查询任务详情（基于内存缓存）
 
@@ -669,10 +673,27 @@ class DataFactoryCodeSearch:
             code_path: 路径筛选（字符串前缀/包含匹配）
             from_table: 输入表名称筛选，支持模糊匹配
             to_table: 输出表名称筛选，支持模糊匹配
+            page: 页码，从 1 开始
+            page_size: 每页任务数，默认20，最大50
 
         Returns:
-            任务详情列表
+            包含 tasks、pagination 和 agent 操作提示的字典
         """
+        if (
+            isinstance(page, bool)
+            or not isinstance(page, int)
+            or isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+        ):
+            return {
+                "error": "page 和 page_size 必须是整数",
+                "tasks": [],
+                "pagination": {},
+            }
+
+        page = max(1, page)
+        page_size = min(max(page_size, 1), self.TASK_INFO_MAX_PAGE_SIZE)
+
         # 确保缓存已加载
         self.ensure_cache()
         cache, index_by_from_table, index_by_to_table = self._snapshot.get()
@@ -680,7 +701,11 @@ class DataFactoryCodeSearch:
 
         # 参数校验：至少需要一个筛选条件
         if not code_path and not from_table and not to_table:
-            return [{"error": "请至少填写一个筛选条件"}]
+            return {
+                "error": "请至少填写一个筛选条件",
+                "tasks": [],
+                "pagination": {},
+            }
 
         # 获取候选任务列表。None 表示尚未应用任何筛选条件，
         # 空 set 则表示某个筛选条件已经明确没有命中，二者不能混淆。
@@ -719,11 +744,31 @@ class DataFactoryCodeSearch:
         # 这样用户才能知道自己的查询条件没有命中
         if not candidate_paths:
             logger.info("没有匹配到符合条件的任务")
-            return []
+            return {
+                "tasks": [],
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": 0,
+                    "returned": 0,
+                    "total_pages": 0,
+                    "has_previous": False,
+                    "has_next": False,
+                },
+                "hint": "没有匹配到符合条件的任务。",
+            }
 
-        # 构建返回结果
+        # 分页后只为当前页生成 overview，避免一次解析全部候选任务。
+        sorted_paths = sorted(candidate_paths)
+        total = len(sorted_paths)
+        total_pages = (total + page_size - 1) // page_size
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        page_paths = sorted_paths[start_idx:end_idx]
+
+        # 构建当前页返回结果
         tasks = []
-        for code_path_key in sorted(candidate_paths):
+        for code_path_key in page_paths:
             task_obj = cache.get(code_path_key)
             if not task_obj:
                 continue
@@ -754,8 +799,41 @@ class DataFactoryCodeSearch:
 
             tasks.append(task_result)
 
-        logger.info(f"查询完成，共返回 {len(tasks)} 条任务")
-        return tasks
+        returned = len(tasks)
+        has_previous = page > 1 and total > 0
+        has_next = page < total_pages
+
+        if returned == 0:
+            hint = (
+                f"共 {total} 条任务，但当前是第 {page} 页，未展示到数据；"
+                f"请使用 page=1 到 page={total_pages}。"
+            )
+        elif has_next:
+            hint = (
+                f"共 {total} 条任务，本页展示 {returned} 条（第 {page}/{total_pages} 页）。"
+                f"如需继续查看，请保持筛选条件不变并传 page={page + 1}；"
+                f"也可以进一步缩小筛选条件，或调整 page_size（最大{self.TASK_INFO_MAX_PAGE_SIZE}）。"
+            )
+        else:
+            hint = f"共 {total} 条任务，本页展示 {returned} 条（第 {page}/{total_pages} 页），已全部展示。"
+
+        logger.info(
+            f"查询完成，共 {total} 条任务，本页返回 {returned} 条，"
+            f"page={page}, page_size={page_size}"
+        )
+        return {
+            "tasks": tasks,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "returned": returned,
+                "total_pages": total_pages,
+                "has_previous": has_previous,
+                "has_next": has_next,
+            },
+            "hint": hint,
+        }
 
 # 默认实例
 ds_code_search = DataFactoryCodeSearch()
@@ -826,7 +904,9 @@ def datafactory_sql_search(
 def datafactory_task_info(
     code_path: Optional[str] = None,
     from_table: Optional[str] = None,
-    to_table: Optional[str] = None
+    to_table: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
 ) -> str:
     """
     数据工厂DolphinScheduler 任务详情查询工具
@@ -846,9 +926,12 @@ def datafactory_task_info(
                    - 模糊匹配：如 "对公有效户" 会匹配所有路径中包含该关键词的任务（项目名、工作流名、任务名均可）
         from_table: 输入表名称筛选，只返回使用了该表作为输入的任务，支持模糊匹配（如 "dim_" 会匹配所有包含 dim_ 的表）
         to_table: 输出表名称筛选，只返回将该表作为输出的任务，支持模糊匹配（如 "dws_" 会匹配所有 dws 开头的表）
+        page: 页码，从1开始，默认1
+        page_size: 每页任务数，默认20，最多50
 
     Returns:
-        JSON 格式的任务详情列表，每个元素包含：
+        JSON 格式的对象，包含 tasks、pagination 和 hint。
+        tasks 中每个元素包含：
         - code_path: 任务完整路径
         - 任务类型：SQL / SHELL_SQL / SHELL_SQOOP / SHELL_TRINO_SYNC
         - sql_overview：SQL 解析得到的语句类型、输入表、输出表、CTE 及行号；不返回 SQL 原文
@@ -856,21 +939,20 @@ def datafactory_task_info(
         - 任务状态：已上线/未上线
         - 输入表清单：该任务依赖的输入表列表
         - 输出表清单：该任务产出的输出表列表
-        - 来源数据类型：（仅在任务类型为 SQL/SHELL_SQL/SHELL_SQOOP/SHELL_TRINO_SYNC 时出现）来源数据类型，如 mysql/hive/trino，暂无则为 "未知"
-        - 来源数据IP：（同上）来源数据 IP，暂无则为 "未知"
-        - 目标数据类型：（同上）目标数据类型，暂无则为 "未知"
-        - 目标数据IP：（同上）目标数据 IP，暂无则为 "未知"
+        pagination 会说明 total、returned、page、total_pages、has_next；hint 会告诉 agent 如何继续翻页。
 
     注意：code_path、from_table、to_table 三个参数至少需要填写一个。
     """
     result = ds_code_search.query_task_info(
         code_path=code_path,
         from_table=from_table,
-        to_table=to_table
+        to_table=to_table,
+        page=page,
+        page_size=page_size,
     )
 
-    if result and isinstance(result, list) and "error" in result[0]:
-        return f"错误: {result[0]['error']}"
+    if isinstance(result, dict) and "error" in result:
+        return f"错误: {result['error']}"
 
     return json.dumps(result, ensure_ascii=False, indent=2)
 

@@ -353,8 +353,10 @@ class TaskInfoTests(unittest.TestCase):
             }
         })
         result = inst.query_task_info(code_path="taskA")
-        self.assertEqual(len(result), 1)
-        task = result[0]
+        self.assertEqual(result["pagination"]["total"], 1)
+        self.assertEqual(result["pagination"]["returned"], 1)
+        self.assertFalse(result["pagination"]["has_next"])
+        task = result["tasks"][0]
         self.assertNotIn("代码", task)
         self.assertIn("sql_overview", task)
         self.assertTrue(task["sql_overview"]["parse_ok"])
@@ -384,7 +386,46 @@ class TaskInfoTests(unittest.TestCase):
             from_table="ods.x",
             to_table="dws.b",
         )
-        self.assertEqual(result, [])
+        self.assertEqual(result["tasks"], [])
+        self.assertEqual(result["pagination"]["total"], 0)
+
+    def test_paginates_tasks_and_returns_agent_hint(self):
+        tasks = {
+            f"/ds/p/proc/task_{index}": {
+                "sql_code": f"SELECT {index}",
+            }
+            for index in range(1, 4)
+        }
+        inst = self._make_instance_with_cache(tasks)
+
+        first_page = inst.query_task_info(
+            code_path="/ds/p/proc",
+            page=1,
+            page_size=2,
+        )
+        self.assertEqual(first_page["pagination"]["total"], 3)
+        self.assertEqual(first_page["pagination"]["returned"], 2)
+        self.assertEqual(first_page["pagination"]["total_pages"], 2)
+        self.assertTrue(first_page["pagination"]["has_next"])
+        self.assertIn("page=2", first_page["hint"])
+
+        second_page = inst.query_task_info(
+            code_path="/ds/p/proc",
+            page=2,
+            page_size=2,
+        )
+        self.assertEqual(second_page["pagination"]["returned"], 1)
+        self.assertFalse(second_page["pagination"]["has_next"])
+        self.assertIn("已全部展示", second_page["hint"])
+
+    def test_page_beyond_range_returns_empty_page_hint(self):
+        path = "/ds/p/proc/taskA"
+        inst = self._make_instance_with_cache({
+            path: {"sql_code": "SELECT 1"},
+        })
+        result = inst.query_task_info(code_path="taskA", page=2, page_size=1)
+        self.assertEqual(result["tasks"], [])
+        self.assertIn("page=1", result["hint"])
 
 
 if __name__ == "__main__":

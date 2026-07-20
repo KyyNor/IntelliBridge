@@ -207,14 +207,17 @@ by_to_table: Dict[str, List[str]] = {...}
 | code_path | string | 否 | - | 路径筛选，支持精确或模糊匹配（如 `/ds/*/*/决策`） |
 | from_table | string | 否 | - | 输入表名称筛选，支持模糊匹配 |
 | to_table | string | 否 | - | 输出表名称筛选，支持模糊匹配 |
+| page | int | 否 | 1 | 页码，从1开始 |
+| page_size | int | 否 | 20 | 每页任务数，最大50 |
 
 > 注：三个参数至少填写一个，支持任意组合筛选（AND 逻辑）。
 
 ### 返回格式
 
 ```json
-[
-  {
+{
+  "tasks": [
+    {
     "code_path": "/ds/ODS/日报工作流/用户表同步",
     "任务类型": "SQL",
     "代码行数": 500,
@@ -226,11 +229,23 @@ by_to_table: Dict[str, List[str]] = {...}
       "statement_count": 1,
       "statements": []
     }
-  }
-]
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "page_size": 20,
+    "total": 35,
+    "returned": 20,
+    "total_pages": 2,
+    "has_previous": false,
+    "has_next": true
+  },
+  "hint": "共35条任务，本页展示20条（第1/2页）。如需继续查看，请保持筛选条件不变并传 page=2。"
+}
 ```
 
 > 注：返回中的 `code_path` 即任务的唯一标识，可用于后续关联查询。
+> `hint` 会告诉 agent 当前总数、本页展示数和下一页调用方式；overview 只为当前页任务生成。
 
 ### 表清单说明
 
@@ -247,7 +262,8 @@ by_to_table: Dict[str, List[str]] = {...}
 |------|---------|
 | sql_code 为 NULL | 返回空字符串，跳过该记录 |
 | from/to_database_table 为 NULL | 返回空数组 |
-| 无匹配结果 | 返回空数组，total=0，pagination.total=0 |
+| 无匹配结果 | 返回 `tasks=[]`，并在 pagination 中返回 `total=0` |
+| task_info 页码超出范围 | 返回空 tasks，并提示合法页码范围 |
 | sql 的 code_path 不完整 | 返回错误，提示先通过 task_info 获取完整任务路径 |
 | 正则语法正确但匹配不到任何内容 | 返回空结果（不同于语法错误） |
 | 正则语法错误 | 返回错误提示，说明原因及具体位置 |
@@ -266,7 +282,7 @@ by_to_table: Dict[str, List[str]] = {...}
 | 项 | 限制 |
 |----|------|
 | 单次查询最大返回条数 | 1000 条 |
-| 默认每页条数 | 50 条 |
+| 默认每页条数 | task_info 20 条；sql 保留兼容字段 |
 | sql_code 截取长度 | sql 仅返回匹配上下文或指定行范围；task_info 返回结构概览 |
 | 单任务匹配行数 | 最多返回100个匹配行，超出后截断并提示 |
 | 正则表达式超时 | 5 秒，超时后停止搜索并提示简化 pattern |
