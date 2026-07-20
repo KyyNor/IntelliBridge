@@ -5,6 +5,7 @@ services:
     user: "0"
     ports:
       - "10000:10000"
+      - "4040:4040"
     volumes:
       - spark-test-warehouse:/tmp/spark-warehouse
       - ./tests/spark_thrift/entrypoint.sh:/opt/spark-test/entrypoint.sh:ro

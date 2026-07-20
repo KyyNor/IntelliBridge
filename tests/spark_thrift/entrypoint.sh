@@ -6,7 +6,8 @@ mkdir -p /tmp/spark-warehouse
 /opt/spark/sbin/start-thriftserver.sh \
   --master local[2] \
   --conf spark.sql.warehouse.dir=/tmp/spark-warehouse \
-  --conf spark.ui.enabled=false \
+  --conf spark.ui.enabled=true \
+  --conf spark.ui.port=4040 \
   --conf spark.driver.bindAddress=0.0.0.0 \
   --hiveconf hive.server2.thrift.port=10000 \
   --hiveconf hive.server2.thrift.bind.host=0.0.0.0 \
