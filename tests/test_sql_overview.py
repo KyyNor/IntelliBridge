@@ -257,6 +257,10 @@ class SearchSqlTests(unittest.TestCase):
         match = result["matches"][0]
         self.assertTrue(match["截断"])
         self.assertEqual(len(match["行号"]), 100)
+        self.assertEqual(match["匹配行数"], 150)
+        self.assertEqual(match["返回行数"], 100)
+        self.assertTrue(match["还有更多"])
+        self.assertTrue(match["匹配统计完整"])
         self.assertNotIn("col_149", str(result))
 
     def test_range_mode_reads_requested_lines_without_pattern_fallback(self):
@@ -311,10 +315,10 @@ class SearchSqlTests(unittest.TestCase):
         inst = self._make_instance_with_cache({
             path: {"sql_code": "a" * 50000 + "!"},
         })
-        inst.REGEX_TIMEOUT = 0.001
+        inst.REGEX_TOTAL_TIMEOUT = 0.001
         result = inst.search_sql_codes(pattern=r"(a+)+$", code_path=path)
         self.assertTrue(result.get("regex_timeout"))
-        self.assertIn("超过 5 秒", result["message"])
+        self.assertIn("总预算", result["message"])
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +392,39 @@ class TaskInfoTests(unittest.TestCase):
         )
         self.assertEqual(result["tasks"], [])
         self.assertEqual(result["pagination"]["total"], 0)
+
+    def test_whitespace_filters_are_ignored_independently(self):
+        path_a = "/ds/p/proc/taskA"
+        path_b = "/ds/p/proc/taskB"
+        inst = self._make_instance_with_cache(
+            {
+                path_a: {"sql_code": "SELECT 1", "from_database_table": ["ods.x"]},
+                path_b: {"sql_code": "SELECT 2", "from_database_table": ["ods.x"]},
+            },
+            from_index={"ods.x": [path_a, path_b]},
+        )
+        result = inst.query_task_info(
+            code_path=" ",
+            from_table="ods.x",
+            to_table=" ",
+        )
+        self.assertEqual(result["pagination"]["total"], 2)
+
+    def test_all_whitespace_filters_still_require_a_condition(self):
+        inst = self._make_instance_with_cache({
+            "/ds/p/proc/taskA": {"sql_code": "SELECT 1"},
+        })
+        result = inst.query_task_info(code_path=" ", from_table="\t", to_table="  ")
+        self.assertIn("error", result)
+
+    def test_overview_is_reused_for_repeated_task_info_queries(self):
+        path = "/ds/p/proc/taskA"
+        inst = self._make_instance_with_cache({
+            path: {"sql_code": "SELECT 1"},
+        })
+        inst.query_task_info(code_path="taskA")
+        inst.query_task_info(code_path="taskA")
+        self.assertEqual(len(inst._overview_cache), 1)
 
     def test_paginates_tasks_and_returns_agent_hint(self):
         tasks = {

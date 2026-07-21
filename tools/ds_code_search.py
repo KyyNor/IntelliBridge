@@ -3,7 +3,8 @@
 import regex
 import json
 import threading
-from typing import Optional, List, Dict, Any
+import time
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 
 from utils.mysql_pool import mysql_pool
@@ -22,11 +23,10 @@ class DataFactoryCodeSearch:
     # 需要展示数据源信息的 lineage_type 白名单
     DATASOURCE_TYPES = frozenset({"SQL", "SHELL_SQL", "SHELL_SQOOP", "SHELL_TRINO_SYNC"})
 
-    MAX_LIMIT = 1000
-    DEFAULT_PAGE_SIZE = 50
     TASK_INFO_DEFAULT_PAGE_SIZE = 20
     TASK_INFO_MAX_PAGE_SIZE = 50
     REGEX_TIMEOUT = 5  # 秒
+    REGEX_TOTAL_TIMEOUT = 30  # 单次 SQL 搜索总预算（秒）
     CACHE_REFRESH_INTERVAL = 8 * 60 * 60  # 8小时 = 28800秒
 
     def __init__(self):
@@ -41,6 +41,10 @@ class DataFactoryCodeSearch:
         # 定时刷新线程
         self._refresh_timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
+
+        # SQL overview 按任务路径和 SQL 内容缓存；缓存刷新后整体清理。
+        self._overview_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._overview_lock = threading.Lock()
 
     # ========== 路径匹配辅助方法（简化版：直接当字符串匹配）==========
     # code_path 就是完整的路径字符串，如 /ds/ODS/日报工作流/用户表同步
@@ -216,6 +220,8 @@ class DataFactoryCodeSearch:
                     new_index_by_from_table,
                     new_index_by_to_table,
                 ))
+                with self._overview_lock:
+                    self._overview_cache.clear()
                 self._cache_loaded = True
                 self._last_load_time = datetime.now()
                 logger.info(f"缓存加载完成，共 {len(new_cache)} 条任务")
@@ -284,8 +290,6 @@ class DataFactoryCodeSearch:
         # 匹配方式：
         # 1. filter 是路径的前缀
         # 2. filter 出现在路径的任意位置（模糊匹配）
-        combined_pattern = f"({escaped_filter})|(^/ds/{escaped_filter})"
-
         # 直接用 regex 做模糊匹配（忽略大小写）
         # 匹配方式：filter 出现在路径的任意位置
         if regex.search(escaped_filter, full_path, flags=regex.IGNORECASE):
@@ -361,24 +365,31 @@ class DataFactoryCodeSearch:
 
     def _build_task_overview(self, code_path: str, task_obj: Dict) -> Dict[str, Any]:
         """构建单个任务的 SQL 结构概览，不返回 SQL 原文。"""
-        summary = summarize_sql(task_obj.get("sql_code", "") or "")
-        return {
-            "code_path": code_path,
-            "任务状态": task_obj.get("任务状态", "未知"),
-            "lineage_type": task_obj.get("lineage_type", ""),
-            "parse_ok": summary["parse_ok"],
-            "statement_count": summary["statement_count"],
-            "statements": summary["statements"],
-            "from_database_table": task_obj.get("from_database_table", []),
-            "to_database_table": task_obj.get("to_database_table", []),
-        }
+        sql_code = task_obj.get("sql_code", "") or ""
+        cache_key = (code_path, sql_code)
+        with self._overview_lock:
+            cached = self._overview_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            summary = summarize_sql(sql_code)
+            overview = {
+                "code_path": code_path,
+                "任务状态": task_obj.get("任务状态", "未知"),
+                "lineage_type": task_obj.get("lineage_type", ""),
+                "parse_ok": summary["parse_ok"],
+                "statement_count": summary["statement_count"],
+                "statements": summary["statements"],
+                "from_database_table": task_obj.get("from_database_table", []),
+                "to_database_table": task_obj.get("to_database_table", []),
+            }
+            self._overview_cache[cache_key] = overview
+            return overview
 
     def _build_empty_pattern_fallback(
         self,
         code_path: str,
         task_obj: Dict,
-        page: int,
-        page_size: int,
     ) -> Dict[str, Any]:
         """返回空 pattern 的结构化结果，避免把整段 SQL 当作空正则返回。"""
         return {
@@ -391,8 +402,8 @@ class DataFactoryCodeSearch:
             "code_path": code_path,
             "overview": self._build_task_overview(code_path, task_obj),
             "pagination": {
-                "page": page,
-                "page_size": page_size,
+                "page": 1,
+                "page_size": 1,
                 "total": 1,
                 "total_pages": 1,
             },
@@ -490,8 +501,6 @@ class DataFactoryCodeSearch:
         before: int = 0,
         after: int = 0,
         code_status: str = "已上线",
-        page: int = 1,
-        page_size: int = 20,
         start_line: Optional[int] = None,
         end_line: Optional[int] = None,
     ) -> Dict[str, Any]:
@@ -508,9 +517,6 @@ class DataFactoryCodeSearch:
             scale = self.MAX_TOTAL_CONTEXT_LINES / context_total
             before = int(before * scale)
             after = self.MAX_TOTAL_CONTEXT_LINES - before
-
-        page = max(1, page)
-        page_size = min(max(page_size, 1), 50)
 
         self.ensure_cache()
         cache, _, _ = self._snapshot.get()
@@ -546,12 +552,7 @@ class DataFactoryCodeSearch:
         if code_status in ("已上线", "未上线") and task_obj.get("任务状态") != code_status:
             return {
                 "matches": [],
-                "pagination": {
-                    "page": page,
-                    "page_size": page_size,
-                    "total": 0,
-                    "total_pages": 0,
-                },
+                "pagination": {"page": 1, "page_size": 1, "total": 0, "total_pages": 0},
             }
 
         # 空 pattern 直接返回单个任务的概览，不先执行空正则扫描整段 SQL。
@@ -559,10 +560,9 @@ class DataFactoryCodeSearch:
             return self._build_empty_pattern_fallback(
                 code_path=normalized_path,
                 task_obj=task_obj,
-                page=page,
-                page_size=page_size,
             )
 
+        search_deadline = time.monotonic() + self.REGEX_TOTAL_TIMEOUT
         try:
             compiled_regex = regex.compile(pattern, flags=regex.IGNORECASE)
         except regex.error as e:
@@ -575,18 +575,27 @@ class DataFactoryCodeSearch:
 
         sql_lines = task_obj.get("sql_lines", [])
         matched_lines = []
-        regex_timed_out = False
+        matched_count = 0
+        timeout_reason = None
         truncated = False
 
         for line_num, line in enumerate(sql_lines, start=1):
+            remaining = search_deadline - time.monotonic()
+            if remaining <= 0:
+                timeout_reason = "total"
+                break
             try:
-                match = compiled_regex.search(line, timeout=self.REGEX_TIMEOUT)
+                match = compiled_regex.search(
+                    line,
+                    timeout=min(self.REGEX_TIMEOUT, remaining),
+                )
                 if not match:
                     continue
 
+                matched_count += 1
                 if len(matched_lines) >= self.MAX_MATCHED_LINES:
                     truncated = True
-                    break
+                    continue
 
                 start_idx = max(0, line_num - 1 - before)
                 end_idx = min(len(sql_lines), line_num - 1 + after + 1)
@@ -597,7 +606,7 @@ class DataFactoryCodeSearch:
                 })
             except TimeoutError:
                 logger.warning(f"正则匹配超时: {normalized_path}, 行 {line_num}")
-                regex_timed_out = True
+                timeout_reason = "total" if remaining <= self.REGEX_TIMEOUT else "line"
                 break
 
         if not matched_lines:
@@ -610,10 +619,19 @@ class DataFactoryCodeSearch:
                     "total_pages": 0,
                 },
             }
-            if regex_timed_out:
+            if timeout_reason:
+                message = (
+                    f"正则搜索超过 {self.REGEX_TOTAL_TIMEOUT} 秒总预算，已停止继续搜索；"
+                    "请缩小代码范围或简化 pattern。"
+                    if timeout_reason == "total"
+                    else (
+                        f"单行正则匹配超过 {self.REGEX_TIMEOUT} 秒，已停止继续搜索；"
+                        "请简化 pattern。"
+                    )
+                )
                 result.update({
                     "regex_timeout": True,
-                    "message": "正则匹配超过 5 秒，已停止继续搜索；请简化 pattern。",
+                    "message": message,
                 })
             return result
 
@@ -623,7 +641,10 @@ class DataFactoryCodeSearch:
         ]
         match_result = {
             "code_path": normalized_path,
-            "匹配行数": len(matched_lines),
+            "匹配行数": matched_count,
+            "返回行数": len(matched_lines),
+            "还有更多": truncated,
+            "匹配统计完整": timeout_reason is None,
             "行号": [item["行号"] for item in matched_lines],
             "所有匹配行上下文": all_contexts,
             "代码片段": all_contexts[0]["代码片段"],
@@ -632,19 +653,27 @@ class DataFactoryCodeSearch:
             "from_database_table": task_obj.get("from_database_table", []),
             "to_database_table": task_obj.get("to_database_table", []),
         }
+        hints = []
         if truncated:
-            match_result.update({
-                "截断": True,
-                "提示": (
-                    f"该 pattern 命中行数超过 {self.MAX_MATCHED_LINES} 行，"
-                    "只返回前面的匹配结果；如需查看更多，请使用更精确的 pattern 或 start_line/end_line。"
-                ),
-            })
-        if regex_timed_out:
-            match_result.update({
-                "正则超时": True,
-                "提示": "正则匹配超过 5 秒，已停止继续搜索；请简化 pattern。",
-            })
+            match_result["截断"] = True
+            hints.append(
+                f"该 pattern 共命中至少 {matched_count} 行，只返回前 {self.MAX_MATCHED_LINES} 行；"
+                "如需查看更多，请使用更精确的 pattern 或 start_line/end_line。"
+            )
+        if timeout_reason:
+            match_result["正则超时"] = True
+            if timeout_reason == "total":
+                hints.append(
+                    f"正则搜索超过 {self.REGEX_TOTAL_TIMEOUT} 秒总预算，已停止继续搜索；"
+                    "请缩小代码范围或简化 pattern。"
+                )
+            else:
+                hints.append(
+                    f"单行正则匹配超过 {self.REGEX_TIMEOUT} 秒，已停止继续搜索；"
+                    "请简化 pattern。"
+                )
+        if hints:
+            match_result["提示"] = " ".join(hints)
 
         return {
             "matches": [match_result],
@@ -657,6 +686,14 @@ class DataFactoryCodeSearch:
         }
 
     # ========== Task 5: 基于缓存实现 datafactory_task_info ==========
+
+    @staticmethod
+    def _normalize_optional_filter(value: Optional[str]) -> Optional[str]:
+        """独立清理可选筛选条件；空白参数不影响其他有效条件。"""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     def query_task_info(
         self,
@@ -693,6 +730,11 @@ class DataFactoryCodeSearch:
 
         page = max(1, page)
         page_size = min(max(page_size, 1), self.TASK_INFO_MAX_PAGE_SIZE)
+
+        # 每个筛选条件独立清理：例如 to_table=" " 不会屏蔽有效的 from_table。
+        code_path = self._normalize_optional_filter(code_path)
+        from_table = self._normalize_optional_filter(from_table)
+        to_table = self._normalize_optional_filter(to_table)
 
         # 确保缓存已加载
         self.ensure_cache()
@@ -849,8 +891,6 @@ def datafactory_sql_search(
     before: int = 0,
     after: int = 0,
     code_status: str = "已上线",
-    page: int = 1,
-    page_size: int = 20,
     start_line: Optional[int] = None,
     end_line: Optional[int] = None,
 ) -> str:
@@ -871,7 +911,6 @@ def datafactory_sql_search(
         before: 整数，匹配行往前显示的行数，用于查看上下文（可选，默认0，最大50行）
         after: 整数，匹配行往后显示的行数，用于查看上下文（可选，默认0，最大50行，总计不超过100行）
         code_status: 状态过滤，可选 "已上线"(默认)、"未上线"，只会返回相应状态的任务
-        page/page_size: 保留分页字段兼容性；精确路径模式下最多返回一个任务
         start_line: 起始行号，和 end_line 同时填写时读取连续代码，不执行 pattern（1-based）
         end_line: 结束行号，包含该行；单次最多读取100行
 
@@ -879,7 +918,7 @@ def datafactory_sql_search(
         JSON 格式的搜索结果，包含：
         - matches: 匹配或读取到的代码片段
         - fallback: pattern 为空时返回的 SQL 结构概览及原因说明
-        - pagination: 兼容性分页信息
+        - pagination: 单个任务结果统计信息
     """
     result = ds_code_search.search_sql_codes(
         pattern=pattern,
@@ -887,8 +926,6 @@ def datafactory_sql_search(
         before=before,
         after=after,
         code_status=code_status,
-        page=page,
-        page_size=page_size,
         start_line=start_line,
         end_line=end_line,
     )

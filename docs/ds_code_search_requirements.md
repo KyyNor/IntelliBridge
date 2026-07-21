@@ -158,8 +158,6 @@ by_to_table: Dict[str, List[str]] = {...}
 | before | int | 否 | 0 | 匹配行前的行数 |
 | after | int | 否 | 0 | 匹配行后的行数 |
 | code_status | string | 否 | "已上线" | 状态过滤：已上线/未上线/全部 |
-| page | int | 否 | 1 | 页码 |
-| page_size | int | 否 | 50 | 每页条数 |
 | start_line | int | 否 | - | 起始行号，和 end_line 同时填写时读取代码 |
 | end_line | int | 否 | - | 结束行号，包含该行；单次最多读取100行 |
 
@@ -170,16 +168,14 @@ by_to_table: Dict[str, List[str]] = {...}
   "matches": [
     {
       "code_path": "xxx",
+      "匹配行数": 1,
+      "返回行数": 1,
+      "还有更多": false,
       "行号": 11,
       "代码片段": "select * from table..."
     }
   ],
-  "pagination": {
-    "page": 1,
-    "page_size": 50,
-    "total": 100,
-    "total_pages": 2
-  }
+  "pagination": {"page": 1, "page_size": 1, "total": 1, "total_pages": 1}
 }
 ```
 
@@ -271,6 +267,8 @@ by_to_table: Dict[str, List[str]] = {...}
 | before/after 同时使用且匹配行相邻 | 允许重叠返回，不做去重（保留完整上下文） |
 | 所有筛选参数均未填写 | 返回错误提示"请至少填写一个筛选条件" |
 | code_path 参数带有前后空格 | 自动 trim() 后再做匹配 |
+| task_info 某个筛选参数为空白 | 忽略该参数，不影响其他有效筛选参数 |
+| task_info 所有筛选参数均为空白 | 返回错误提示"请至少填写一个筛选条件" |
 | sql 的 pattern 为空 | 返回该任务 SQL 概览，并说明需要更精确的 pattern 或行范围 |
 | sql 指定 start_line/end_line | 直接返回行范围，不执行正则，也不触发 pattern 回退 |
 | start_line/end_line 超过100行 | 返回错误，不扩大返回范围 |
@@ -282,10 +280,11 @@ by_to_table: Dict[str, List[str]] = {...}
 | 项 | 限制 |
 |----|------|
 | 单次查询最大返回条数 | 1000 条 |
-| 默认每页条数 | task_info 20 条；sql 保留兼容字段 |
+| 默认每页条数 | task_info 20 条 |
 | sql_code 截取长度 | sql 仅返回匹配上下文或指定行范围；task_info 返回结构概览 |
-| 单任务匹配行数 | 最多返回100个匹配行，超出后截断并提示 |
-| 正则表达式超时 | 5 秒，超时后停止搜索并提示简化 pattern |
+| 单任务匹配行数 | 最多返回100个匹配行；匹配行数会继续统计，超出后截断并提示 |
+| 单行正则表达式超时 | 5 秒，超时后停止搜索并提示简化 pattern |
+| 单次 SQL 正则搜索总预算 | 30 秒，超时后停止搜索并提示缩小范围或简化 pattern |
 | code_path 匹配 | sql 使用精确路径；task_info 使用模糊匹配 |
 
 ### 实现建议
