@@ -86,9 +86,10 @@ dolphin_scheduler:
 spark_sql_analyzer:
   enabled: true
   # ThriftServer 的 Spark Web UI 地址（4040 = spark.ui.port）
+  # 留空 / 未配置时不启动分析器（不做任何事情）
   base_url: "http://localhost:4040"
-  # 拉取新查询的轮询间隔（秒）
-  poll_interval_seconds: 30
+  # 拉取新查询的轮询间隔（秒），默认 30 分钟
+  poll_interval_seconds: 1800
   # 每次分析后覆盖写的报告文件路径（相对项目根目录）
   report_path: "logs/spark_sql_report.json"
   # diskcache 中保留的最大历史记录条数（超出按时间裁剪）

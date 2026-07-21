@@ -39,11 +39,12 @@ class SparkSqlAnalyzer:
 
     def __init__(self):
         self._enabled: bool = bool(config.get("spark_sql_analyzer.enabled", False))
-        self._base_url: str = config.get(
-            "spark_sql_analyzer.base_url", "http://localhost:4040"
+        # base_url 未配置 / 留空时为 None —— ensure_started() 会直接返回，不做任何事
+        self._base_url: Optional[str] = config.get(
+            "spark_sql_analyzer.base_url", None
         )
         self._poll_interval: float = float(
-            config.get("spark_sql_analyzer.poll_interval_seconds", 30)
+            config.get("spark_sql_analyzer.poll_interval_seconds", 1800)
         )
         self._report_path: Path = Path(
             config.get("spark_sql_analyzer.report_path", "logs/spark_sql_report.json")
@@ -89,6 +90,12 @@ class SparkSqlAnalyzer:
         """幂等启动后台轮询。由 main.py 的 lifespan 调用。"""
         if not self._enabled:
             logger.info("Spark SQL 分析器未启用（spark_sql_analyzer.enabled=false）")
+            return
+        if not self._base_url:
+            # base_url 未配置 / 留空 —— 不做任何事情（不启动轮询、不恢复历史）
+            logger.info(
+                "Spark SQL 分析器跳过：未配置 spark_sql_analyzer.base_url"
+            )
             return
         with self._lock:
             if self._started:

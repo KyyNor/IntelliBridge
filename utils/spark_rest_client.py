@@ -94,7 +94,9 @@ class SparkRestClient:
         base_url: Optional[str] = None,
         timeout: float = _DEFAULT_TIMEOUT,
     ):
-        self.base_url = (base_url or config.get("spark_sql_analyzer.base_url", "http://localhost:4040")).rstrip("/")
+        # 不做默认值兜底 —— base_url 由上层（SparkSqlAnalyzer）决定是否启用。
+        # 传入 None 或空串时 base_url 为空串，后续所有请求会失败并记 debug 日志。
+        self.base_url = (base_url or "").rstrip("/")
         self.timeout = timeout
 
     # ------------------------------------------------------------------
