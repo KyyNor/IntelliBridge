@@ -151,3 +151,6 @@ tests/spark_thrift/output/
 logs/spark_sql_report.json
 
 intelli_bridge.db
+
+# Load spool（tools/load_export.py）
+data/

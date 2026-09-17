@@ -9,6 +9,7 @@ import uvicorn
 from tools.hive_query import hive_mcp, router as hive_router
 from tools.agent_browser import agent_browser_mcp,router as agent_browser_router
 from tools.mysql_query import mysql_mcp,router as mysql_router
+from tools.load_export import load_job_manager, router as load_router
 from tools.fine_report_tools import fr_mcp, fr_router
 from tools.memory import memory_mcp
 from tools.ds_code_search import ds_search_mcp, DataFactoryCodeSearch
@@ -85,6 +86,7 @@ app.include_router(hive_router)
 app.include_router(agent_browser_router)
 app.include_router(mysql_router)
 app.include_router(fr_router)
+app.include_router(load_router)
 
 _mcp_lifespan = combine_lifespans(
     memory_mcp_app.lifespan,
@@ -103,6 +105,7 @@ def shutdown_resources() -> None:
 
     shutdown_call_log_writer()
     spark_analyzer.stop()
+    load_job_manager.stop()
     hive_pool.close()
     mysql_pool.close_all_pools()
 
@@ -111,6 +114,8 @@ def shutdown_resources() -> None:
 async def combined_lifespan(application):
     # 启动后台 Spark SQL 查询性能分析器（幂等，配置 enabled=false 时是空操作）
     spark_analyzer.ensure_started()
+    # 启动 Load spool TTL 清理器（幂等）
+    load_job_manager.ensure_started()
     try:
         async with _mcp_lifespan(application):
             yield

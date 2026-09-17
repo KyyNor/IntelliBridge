@@ -12,6 +12,8 @@ hive:
   database: "default"
   max_concurrent: 2
   queue_timeout: 60
+  # etl_date 与 cdate 并存时选择的主时间分区字段（平台配置，Agent 不可选）
+  primary_time_partition: "etl_date"
   # 数据库黑名单（list_databases 时不返回这些数据库）
   database_blacklist:
     - default
@@ -105,6 +107,21 @@ spark_sql_analyzer:
     duration_skew_ratio: 4.0
     # stage 的 task 数少于此值不判倾斜（样本太小，比值不可靠）
     min_tasks_for_skew: 20
+
+# 声明式 Load（MySQL/Hive → Parquet 异步导出，见 tools/load_export.py）
+load:
+  # spool 根目录（相对路径相对项目根），必须独立于其他缓存目录
+  spool_root: "data/load_spool"
+  # ready/failed 任务与文件的保留时间（秒）
+  ttl_seconds: 3600
+  # TTL 清理器巡检间隔（秒）
+  sweep_interval_seconds: 300
+  # 并发导出任务上限（Hive/MySQL 各自的连接池并发限制仍然生效）
+  max_concurrent_jobs: 2
+  # 单任务执行时限（秒，协作式检查）
+  job_timeout_seconds: 1800
+  # fetchmany 批大小（行）
+  batch_rows: 20000
 
 fine_report:
   download_path: '/home/bdspk/hxb_dh/cache/intellibridge'
