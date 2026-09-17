@@ -23,6 +23,14 @@ class BlockingRouteTests(unittest.TestCase):
             },
             "tools/agent_browser.py": {"execute_agent_browser"},
             "tools/fine_report_tools.py": {"api_sample", "api_download", "api_paginated"},
+            "tools/load_export.py": {
+                "create_mysql_load",
+                "create_hive_load",
+                "get_hive_profile",
+                "get_load_job",
+                "download_load_file",
+                "delete_load_job",
+            },
         }
 
         for relative_path, function_names in expected.items():
