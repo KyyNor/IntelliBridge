@@ -8,13 +8,20 @@
 Hive metadata 自动适配，不向调用方暴露；两个候选字段并存时按平台配置
 hive.primary_time_partition 选择主字段，不由调用方决定。
 Taosha 侧业务规则（近一年任意日 / 历史仅自然月末）属于 Taosha #16，不在本层实现。
+
+conditional load（issue #3）：调用方可带已知 source_version，本模块在**执行
+SELECT 之前**比较当前版本，一致的逻辑日期不扫描数据、不生成 Parquet。
+source_version 只用于 freshness 判断：读不到就退化为普通 load（status=unknown），
+绝不因为读不到而返回 not_modified。
 """
 
 import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
+
+from utils.source_version import extract_source_version
 
 import pymysql
 from fastapi import APIRouter, HTTPException
@@ -25,7 +32,12 @@ from utils.cache import cache
 from utils.config import config
 from utils.hive_errors import normalize_hive_error
 from utils.hive_pool import hive_pool
-from utils.load_jobs import LoadJobError, LoadJobManager
+from utils.load_jobs import (
+    LoadJobCancelled,
+    LoadJobError,
+    LoadJobManager,
+    LoadJobTimeout,
+)
 from utils.logger import logger
 from utils.mysql_pool import mysql_pool
 from utils.parquet_export import (
@@ -43,6 +55,11 @@ TIME_PARTITION_FIELDS = ("etl_date", "cdate")
 FULL_TABLE_NOTICE = "该表没有时间分区，本次返回全量数据"
 MAX_REQUEST_DATES = 500
 
+# 每个逻辑日期/表级的 conditional load 判定结果
+STATUS_MODIFIED = "modified"
+STATUS_NOT_MODIFIED = "not_modified"
+STATUS_UNKNOWN = "unknown"
+
 # load 自身的 DESCRIBE 串行化（与 hive_query 的 describe 缓存互不影响）
 _describe_lock = threading.RLock()
 
@@ -56,6 +73,10 @@ class HiveLoadRequest(BaseModel):
     database: str
     table: str
     dates: Optional[List[str]] = None
+    # conditional load（issue #3）：已知版本，key 是逻辑日期，绝不出现物理分区字段
+    known_versions: Optional[Dict[str, str]] = None
+    # full_table 的表级已知版本（无时间分区表用这个，不用 known_versions）
+    known_version: Optional[str] = None
 
 
 # ==================== 纯函数：DESCRIBE / SHOW PARTITIONS 解析 ====================
@@ -142,6 +163,21 @@ def build_partitioned_hive_sql(database: str, table: str, partition_field: str, 
     return f"SELECT * FROM `{database}`.`{table}` WHERE `{partition_field}` = '{date}'"
 
 
+def build_partition_describe_sql(
+    database: str, table: str, partition_field: str, date: str
+) -> str:
+    """读单个分区元数据（source_version 探测）；只读 metadata，不触数据。"""
+    return (
+        f"DESCRIBE FORMATTED `{database}`.`{table}` "
+        f"PARTITION (`{partition_field}`='{date}')"
+    )
+
+
+def build_table_describe_sql(database: str, table: str) -> str:
+    """读表级元数据（full_table 的 source_version 探测）。"""
+    return f"DESCRIBE FORMATTED `{database}`.`{table}`"
+
+
 def build_hive_file_name(table: str, partition_field: Optional[str], logical_dates: List[str]) -> str:
     """时间分区表在文件名中表达实际逻辑日期；full_table 文件名绝不能带请求日期。
 
@@ -176,6 +212,61 @@ def normalize_requested_dates(dates) -> List[str]:
     return sorted(seen)
 
 
+# ==================== 纯函数：conditional load 版本校验 ====================
+
+def normalize_known_version(known_version) -> Optional[str]:
+    """表级已知版本：空白视为未提供（= 不做比较，正常导出）。"""
+    if known_version is None:
+        return None
+    text = str(known_version).strip()
+    if not text:
+        raise LoadJobError("known_version 为空，无法比较（不传即为普通 load）")
+    return text
+
+
+def normalize_known_versions(known_versions, requested_dates: List[str]) -> Dict[str, str]:
+    """校验 known_versions 的日期 key 与版本值；只允许请求范围内的逻辑日期。"""
+    if not known_versions:
+        return {}
+    if not isinstance(known_versions, dict):
+        raise LoadJobError("known_versions 必须是 {logical_date: source_version} 对象")
+    resolved: Dict[str, str] = {}
+    for key, value in known_versions.items():
+        date = normalize_requested_dates([key])[0]
+        if date not in requested_dates:
+            raise LoadJobError(
+                f"known_versions 含未请求的日期 {date}；"
+                f"只允许请求范围内的日期（dates={requested_dates}）"
+            )
+        if value is None or not str(value).strip():
+            raise LoadJobError(f"known_versions[{date}] 版本为空，无法比较")
+        resolved[date] = str(value).strip()
+    return resolved
+
+
+def resolve_version_status(known: Optional[str], current: Optional[str]) -> str:
+    """单次比较的判定：一致才 not_modified；读不到当前版本一律 unknown（要导出）。
+
+    方向性很关键——假 not_modified 会让调用方继续用陈旧数据，
+    假 modified 只是多导出一次。因此只有「双方都有版本且相等」才返回 not_modified。
+    """
+    if known is None:
+        return STATUS_MODIFIED  # 未要求比较：按普通 load 导出
+    if current is None:
+        return STATUS_UNKNOWN
+    return STATUS_NOT_MODIFIED if current == known else STATUS_MODIFIED
+
+
+def build_version_check(statuses: List[str], *, requested: bool) -> dict:
+    """版本判定汇总（便于调用方与运维区分 fresh/refresh/不可比较）。"""
+    return {
+        "requested": requested,
+        "not_modified": statuses.count(STATUS_NOT_MODIFIED),
+        "modified": statuses.count(STATUS_MODIFIED),
+        "unknown": statuses.count(STATUS_UNKNOWN),
+    }
+
+
 # ==================== 服务编排 ====================
 
 class LoadExportService:
@@ -208,18 +299,34 @@ class LoadExportService:
             "mysql", {"database_id": database_id, "table": table}, self._run_mysql
         )
 
-    def submit_hive(self, database: str, table: str, dates) -> dict:
+    def submit_hive(
+        self,
+        database: str,
+        table: str,
+        dates,
+        known_versions=None,
+        known_version=None,
+    ) -> dict:
         if not IDENTIFIER_PATTERN.match(database or ""):
             return {"error": f"非法库名: {database!r}"}
         if not IDENTIFIER_PATTERN.match(table or ""):
             return {"error": f"非法表名: {table!r}"}
         try:
             requested = normalize_requested_dates(dates)
+            # 版本入参在提交时就把形状校验掉：错到执行期只会浪费一次 job
+            resolved_versions = normalize_known_versions(known_versions, requested)
+            resolved_version = normalize_known_version(known_version)
         except LoadJobError as exc:
             return {"error": str(exc)}
         return self.manager.submit(
             "hive",
-            {"database": database, "table": table, "requested_dates": requested},
+            {
+                "database": database,
+                "table": table,
+                "requested_dates": requested,
+                "known_versions": resolved_versions,
+                "known_version": resolved_version,
+            },
             self._run_hive,
         )
 
@@ -346,10 +453,70 @@ class LoadExportService:
             raise LoadJobError(f"查询分区列表失败: {normalized['message']}")
         return parse_partition_rows(rows, field)
 
+    # ---------- source_version（只读元数据） ----------
+
+    def _read_partition_source_versions(
+        self, database: str, table: str, field: str, dates: List[str]
+    ) -> Dict[str, Optional[str]]:
+        """逐分区读当前 source_version。
+
+        读不到记 None（调用方退化为普通 load，绝不伪 not_modified）。
+        分区不存在等单点异常后连接状态可能已不可用，剩余分区一并退化。
+        """
+        versions: Dict[str, Optional[str]] = {}
+        if not dates:
+            return versions
+        try:
+            with self._hive_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    for date in dates:
+                        try:
+                            cursor.execute(
+                                build_partition_describe_sql(database, table, field, date)
+                            )
+                            rows = cursor.fetchall()
+                        except (LoadJobCancelled, LoadJobTimeout):
+                            raise
+                        except Exception as exc:
+                            logger.warning(
+                                f"Hive 分区 {database}.{table} logical_date={date} "
+                                f"版本读取失败，退化为普通 load: {exc}"
+                            )
+                            break
+                        version, _ = extract_source_version(rows, "partition")
+                        versions[date] = version
+                finally:
+                    cursor.close()
+        except (LoadJobCancelled, LoadJobTimeout):
+            raise
+        except Exception as exc:
+            logger.warning(f"Hive 分区版本读取整体失败，退化为普通 load: {exc}")
+        return {date: versions.get(date) for date in dates}
+
+    def _read_table_source_version(self, database: str, table: str):
+        """读表级 source_version；返回 (version, version_source)，读不到为 (None, None)。"""
+        try:
+            with self._hive_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(build_table_describe_sql(database, table))
+                    rows = cursor.fetchall()
+                finally:
+                    cursor.close()
+        except (LoadJobCancelled, LoadJobTimeout):
+            raise
+        except Exception as exc:
+            logger.warning(f"Hive 表 {database}.{table} 版本读取失败，退化为普通 load: {exc}")
+            return None, None
+        return extract_source_version(rows, "table")
+
     def _run_hive(self, ctx) -> dict:
         params = ctx.params
         database, table = params["database"], params["table"]
         requested = params.get("requested_dates") or []
+        known_versions = params.get("known_versions") or {}
+        known_version = params.get("known_version")
         described = self._hive_describe(database, table)
         if "error" in described:
             raise LoadJobError(str(described["error"]))
@@ -365,8 +532,34 @@ class LoadExportService:
         if field is None:
             # 无时间分区：忽略日期过滤，整表导出为单个文件；明确告知全量语义。
             # 文件名绝不带请求日期，避免伪快照语义。
+            if known_versions:
+                raise LoadJobError(
+                    f"表 {database}.{table} 没有时间分区（load_mode=full_table），"
+                    "表级版本请用 known_version，不要传 known_versions"
+                )
             load_mode = "full_table"
             notice = FULL_TABLE_NOTICE
+            # 表级版本：条件比较只影响「要不要重新导出」，不改变全量语义
+            current_version, version_source = self._read_table_source_version(database, table)
+            status = resolve_version_status(known_version, current_version)
+            if status == STATUS_NOT_MODIFIED:
+                logger.info(f"Hive load 跳过导出（full_table 版本未变）: {database}.{table}")
+                ctx.set_result(
+                    source={"type": "hive", "database": database, "table": table},
+                    schema=[],
+                    row_count=0,
+                    source_version=current_version,
+                    version_source=version_source,
+                    version_status=status,
+                    load_mode=load_mode,
+                    time_partitioned=False,
+                    requested_dates=requested,
+                    actual_dates=[],
+                    notice=notice,
+                    partitions=[],
+                    version_check=build_version_check([status], requested=True),
+                )
+                return {}
             file_name = build_hive_file_name(table, None, [])
             row_count, resolved = self._export_one(
                 ctx,
@@ -380,12 +573,16 @@ class LoadExportService:
                 source={"type": "hive", "database": database, "table": table},
                 schema=[{"name": name, "type": str(t)} for name, t in resolved],
                 row_count=row_count,
-                source_version=None,
+                source_version=current_version,
+                version_source=version_source,
+                version_status=status,
                 load_mode=load_mode,
                 time_partitioned=False,
                 requested_dates=requested,
                 actual_dates=[],
                 notice=notice,
+                partitions=[],
+                version_check=build_version_check([status], requested=known_version is not None),
             )
             return {}
 
@@ -396,15 +593,40 @@ class LoadExportService:
             raise LoadJobError(
                 f"表 {database}.{table} 是时间分区表，必须至少传一个逻辑日期（dates）"
             )
+        if known_version is not None:
+            raise LoadJobError(
+                f"表 {database}.{table} 是时间分区表（load_mode=time_partitioned），"
+                "分区版本请用 known_versions（按 logical_date），不要传表级 known_version"
+            )
         available = self._show_partitions(database, table, field)
         missing = [d for d in requested if d not in available]
         if missing:
             preview = ", ".join(missing[:20]) + ("..." if len(missing) > 20 else "")
             raise LoadJobError(f"以下日期分区在表中不存在: {preview}")
 
+        # 执行顺序（issue #3）：分区存在性 → 读当前版本 → 比较 → 只导出需要导出的
+        current_versions = self._read_partition_source_versions(
+            database, table, field, requested
+        )
+        partitions: List[dict] = []
+        to_export: List[str] = []
+        for date in requested:
+            version = current_versions.get(date)
+            status = resolve_version_status(known_versions.get(date), version)
+            partitions.append(
+                {
+                    "logical_date": date,
+                    "status": status,
+                    "source_version": version,
+                    "file_id": None,
+                }
+            )
+            if status != STATUS_NOT_MODIFIED:
+                to_export.append(date)
+
         schema = None
         total_rows = 0
-        for index, date in enumerate(sorted(requested)):
+        for index, date in enumerate(to_export):
             ctx.check_alive()
             file_name = build_hive_file_name(table, field, [date])
             row_count, resolved = self._export_one(
@@ -422,20 +644,31 @@ class LoadExportService:
                 )
             # 文件描述符携带逻辑分区身份：Taosha 只消费 logical_date，
             # 不感知底层是 etl_date 还是 cdate。
-            ctx.add_file(file_name, logical_date=date)
+            record = ctx.add_file(file_name, logical_date=date)
+            for entry in partitions:
+                if entry["logical_date"] == date:
+                    entry["file_id"] = record["id"]
+                    break
             total_rows += row_count
-            logger.info(f"Hive load 分区完成 ({index + 1}/{len(requested)}): {table}__{date}")
+            logger.info(
+                f"Hive load 分区完成 ({index + 1}/{len(to_export)}): {table}__{date}"
+            )
 
+        statuses = [entry["status"] for entry in partitions]
         ctx.set_result(
             source={"type": "hive", "database": database, "table": table},
             schema=[{"name": name, "type": str(t)} for name, t in (schema or [])],
             row_count=total_rows,
-            source_version=None,
+            source_version=None,  # 时间分区表的版本在 partitions[].source_version
             load_mode=load_mode,
             time_partitioned=True,
             requested_dates=requested,
-            actual_dates=sorted(requested),
+            actual_dates=sorted(to_export),
             notice=None,
+            partitions=partitions,
+            version_check=build_version_check(
+                statuses, requested=bool(known_versions)
+            ),
         )
         return {}
 
@@ -504,8 +737,14 @@ def create_mysql_load(request: MySqlLoadRequest):
 
 @router.post("/hive")
 def create_hive_load(request: HiveLoadRequest):
-    """提交 Hive 逻辑日期导出任务（Parquet）"""
-    result = load_export.submit_hive(request.database, request.table, request.dates)
+    """提交 Hive 逻辑日期导出任务（Parquet），可选携带已知版本做 conditional load"""
+    result = load_export.submit_hive(
+        request.database,
+        request.table,
+        request.dates,
+        known_versions=request.known_versions,
+        known_version=request.known_version,
+    )
     return {"data": result}
 
 
