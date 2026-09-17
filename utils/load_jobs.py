@@ -72,9 +72,13 @@ class LoadJobContext:
         if time.monotonic() >= self._job["deadline_mono"]:
             raise LoadJobTimeout(f"任务超过执行时限（{self._manager.job_timeout_seconds:g} 秒）")
 
-    def add_file(self, name: str) -> dict:
-        """登记一个已生成的导出文件（计算 size/sha256），返回文件描述。"""
-        return self._manager._register_file(self._job, name)
+    def add_file(self, name: str, **extra) -> dict:
+        """登记一个已生成的导出文件（计算 size/sha256），返回文件描述。
+
+        extra 进入文件描述符（如 logical_date）：Taosha 只消费逻辑日期身份，
+        不感知物理分区字段。
+        """
+        return self._manager._register_file(self._job, name, extra)
 
     def set_result(self, **fields) -> None:
         self._manager._merge_result(self._job, fields)
@@ -309,18 +313,22 @@ class LoadJobManager:
 
     # ==================== 文件登记 / 结果合并 ====================
 
-    def _register_file(self, job: dict, name: str) -> dict:
+    def _register_file(self, job: dict, name: str, extra: Optional[dict] = None) -> dict:
         path = job["dir"] / name
         size, sha256 = _hash_file(path)
         with self._lock:
+            file_id = f"file_{len(job['files']) + 1}"
             record = {
-                "id": f"file_{len(job['files']) + 1}",
+                "id": file_id,
                 "name": name,
                 "format": "parquet",
                 "size": size,
                 "sha256": sha256,
-                "download_url": f"/api/load/{job['job_id']}/files/file_{len(job['files']) + 1}",
+                "download_url": f"/api/load/{job['job_id']}/files/{file_id}",
             }
+            for key, value in (extra or {}).items():
+                if key not in record:  # 保留字段（id/size/sha256/…）不允许被覆盖
+                    record[key] = value
             job["files"].append(record)
             self._persist_locked(job)
         return record

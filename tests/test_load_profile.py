@@ -28,6 +28,7 @@ from utils.load_jobs import LoadJobError
 from tools.load_export import (
     build_hive_file_name,
     build_hive_sql,
+    build_partitioned_hive_sql,
     normalize_requested_dates,
     parse_describe_rows,
     parse_partition_rows,
@@ -98,10 +99,14 @@ class ResolveTimePartitionFieldTests(unittest.TestCase):
         self.assertEqual(resolve_time_partition_field(cols, "cdate"), "cdate")
         self.assertEqual(resolve_time_partition_field(cols, "etl_date"), "etl_date")
 
-    def test_both_present_with_invalid_hint_falls_back(self):
+    def test_both_present_with_invalid_hint_fails_closed(self):
+        # 并存时配置无效 = 数据口径无法判定 → 明确失败，绝不回退到某个字段
         cols = [{"name": "etl_date"}, {"name": "cdate"}]
-        self.assertEqual(resolve_time_partition_field(cols, "biz_date"), "etl_date")
-        self.assertEqual(resolve_time_partition_field(cols, ""), "etl_date")
+        for bad_hint in ("biz_date", "", None):
+            with self.subTest(hint=bad_hint):
+                with self.assertRaises(LoadJobError) as ctx:
+                    resolve_time_partition_field(cols, bad_hint)
+                self.assertIn("primary_time_partition", str(ctx.exception))
 
     def test_no_time_partition_returns_none(self):
         cols = [{"name": "region"}]
@@ -136,6 +141,16 @@ class BuildHiveSqlTests(unittest.TestCase):
             sql, "SELECT * FROM `db8`.`balance` WHERE `etl_date` IN ('2026-09-11', '2026-09-12')"
         )
 
+    def test_time_partitioned_requires_dates(self):
+        with self.assertRaises(LoadJobError):
+            build_hive_sql("db8", "balance", "etl_date", [])
+
+    def test_single_partition_sql_uses_equality(self):
+        sql = build_partitioned_hive_sql("db8", "balance", "etl_date", "2026-09-12")
+        self.assertEqual(
+            sql, "SELECT * FROM `db8`.`balance` WHERE `etl_date` = '2026-09-12'"
+        )
+
     def test_full_table_has_no_date_filter(self):
         sql = build_hive_sql("db8", "branch_info", None, ["2026-09-12"])
         self.assertEqual(sql, "SELECT * FROM `db8`.`branch_info`")
@@ -157,13 +172,12 @@ class BuildHiveFileNameTests(unittest.TestCase):
             "balance__2026-09-12.parquet",
         )
 
-    def test_date_range_uses_first_and_last(self):
-        self.assertEqual(
+    def test_multiple_dates_are_not_merged_into_one_file(self):
+        # 分区即文件：多日期必须逐日一个文件，禁止合成范围文件名
+        with self.assertRaises(LoadJobError):
             build_hive_file_name(
-                "balance", "etl_date", ["2026-09-02", "2026-09-01", "2026-09-03"]
-            ),
-            "balance__2026-09-01__2026-09-03.parquet",
-        )
+                "balance", "etl_date", ["2026-09-01", "2026-09-02", "2026-09-03"]
+            )
 
 
 class NormalizeRequestedDatesTests(unittest.TestCase):

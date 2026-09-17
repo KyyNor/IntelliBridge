@@ -74,15 +74,21 @@ HIVE_DESCRIBE_FULL = {
 class _FakeCursor:
     """按 SQL 语句脚本化返回结果的假游标。"""
 
-    def __init__(self, results, select_names=None, description_types=None):
+    def __init__(self, results, select_names=None, description_types=None, per_date_rows=None):
         self.results = results  # list[(sql_keyword, rows)]
         self.executed = []
         self.select_names = select_names or []
         self.description_types = description_types or {}
+        # 按 SQL 中的日期字面量分别返回行（分区即文件场景）
+        self.per_date_rows = per_date_rows or {}
 
     def execute(self, sql):
         self.executed.append(sql)
         self._pending = []
+        for date, rows in self.per_date_rows.items():
+            if f"'{date}'" in sql:
+                self._pending = rows
+                return
         for keyword, rows in self.results:
             if keyword in sql:
                 self._pending = rows
@@ -247,7 +253,7 @@ class LoadExportServiceTests(unittest.TestCase):
 
     # ---------- Hive ----------
 
-    def _hive_service(self, describe, select_rows, extra_results=()):
+    def _hive_service(self, describe, select_rows, extra_results=(), per_date_rows=None):
         self._hive_describe = describe
         results = list(extra_results) + [
             ("SELECT", select_rows),
@@ -255,16 +261,24 @@ class LoadExportServiceTests(unittest.TestCase):
         self._hive_conn = _FakeCursor(
             results,
             select_names=[c["name"] for c in describe["columns"] + describe["partition_columns"]],
+            per_date_rows=per_date_rows,
         )
         return self._service()
 
-    def test_hive_time_partitioned_etl_date(self):
+    def test_hive_time_partitioned_multiple_dates_produce_per_date_files(self):
+        """分区即文件：每个 logical date 独立文件 + 独立 logical_date 身份。"""
+        import pyarrow.parquet as pq
+
         service = self._hive_service(
             HIVE_DESCRIBE_ETL,
-            [(1, "alice", "2026-09-11"), (2, "bob", "2026-09-11"), (3, None, "2026-09-12")],
+            [],
             extra_results=[
                 ("SHOW PARTITIONS", [("etl_date=2026-09-11",), ("etl_date=2026-09-12",)]),
             ],
+            per_date_rows={
+                "2026-09-11": [(1, "alice", "2026-09-11")],
+                "2026-09-12": [(2, "bob", "2026-09-12"), (3, None, "2026-09-12")],
+            },
         )
         submitted = service.submit_hive("db8", "balance", ["2026-09-12", "2026-09-11"])
         self.assertIsNone(submitted.get("error"))
@@ -276,12 +290,83 @@ class LoadExportServiceTests(unittest.TestCase):
         self.assertEqual(view["actual_dates"], ["2026-09-11", "2026-09-12"])
         self.assertIsNone(view["notice"])
         self.assertEqual(view["row_count"], 3)
-        self.assertEqual(view["files"][0]["name"], "balance__2026-09-11__2026-09-12.parquet")
-        select_sql = [s for s in self._hive_conn.executed if s.startswith("SELECT")][0]
+
+        # 逐日一个文件，文件名与 logical_date 身份一致且升序
+        files = view["files"]
+        self.assertEqual(len(files), 2, files)
+        self.assertEqual([f["name"] for f in files],
+                         ["balance__2026-09-11.parquet", "balance__2026-09-12.parquet"])
+        self.assertEqual([f["logical_date"] for f in files], ["2026-09-11", "2026-09-12"])
+        for f in files:
+            self.assertEqual(f["format"], "parquet")
+            self.assertTrue(f["sha256"])
+            self.assertGreater(f["size"], 0)
+
+        # 每个文件只含对应日期的数据
+        expected_rows = {"2026-09-11": 1, "2026-09-12": 2}
+        for f in files:
+            opened = self.manager.open_file(view["job_id"], f["id"])
+            table = pq.read_table(opened[0])
+            self.assertEqual(table.num_rows, expected_rows[f["logical_date"]], f["name"])
+            self.assertEqual(set(table.column("etl_date").to_pylist()), {f["logical_date"]})
+
+        # 每个分区用等值谓词单独查询，不用 IN 合并
+        selects = [s for s in self._hive_conn.executed if s.startswith("SELECT")]
         self.assertEqual(
-            select_sql,
-            "SELECT * FROM `db8`.`balance` WHERE `etl_date` IN ('2026-09-11', '2026-09-12')",
+            selects,
+            [
+                "SELECT * FROM `db8`.`balance` WHERE `etl_date` = '2026-09-11'",
+                "SELECT * FROM `db8`.`balance` WHERE `etl_date` = '2026-09-12'",
+            ],
         )
+
+    def test_hive_primary_time_partition_invalid_fails_closed(self):
+        """etl_date/cdate 并存且配置非法 → 明确失败，不猜测字段。"""
+        both = {
+            "columns": [{"name": "id", "type": "bigint", "comment": ""}],
+            "partition_columns": [
+                {"name": "etl_date", "type": "string", "comment": ""},
+                {"name": "cdate", "type": "string", "comment": ""},
+            ],
+        }
+        self._hive_describe = both
+        self._hive_conn = _FakeCursor([], select_names=["id"])
+        service = self._service(hive_describe=lambda db, tbl: dict(both))
+        service._primary_time_partition = lambda: "biz_date"  # 配置不指向任一候选
+        submitted = service.submit_hive("db8", "balance", ["2026-09-11"])
+        view = _wait_view(self.manager, submitted["job_id"])
+        self.assertEqual(view["status"], "failed")
+        self.assertIn("primary_time_partition", view["error"])
+        self.assertEqual(view["files"], [])
+        # 只读 profile 同样明确失败，不返回猜测的 load_mode
+        profile = service.hive_profile("db8", "balance")
+        self.assertIn("error", profile)
+        self.assertIn("primary_time_partition", profile["error"])
+
+    def test_hive_both_fields_with_valid_primary_config(self):
+        """并存但配置合法：按配置选择（导出成功，物理字段不外泄）。"""
+        both = {
+            "columns": [{"name": "id", "type": "bigint", "comment": ""}],
+            "partition_columns": [
+                {"name": "etl_date", "type": "string", "comment": ""},
+                {"name": "cdate", "type": "string", "comment": ""},
+            ],
+        }
+        # SELECT * 会同时返回数据列与被选中物理分区列
+        service = self._hive_service(
+            both,
+            [(1, "2026-09-11", "2026-09-11")],
+            extra_results=[("SHOW PARTITIONS", [("cdate=2026-09-11",)])],
+        )
+        service._primary_time_partition = lambda: "cdate"
+        submitted = service.submit_hive("db8", "balance", ["2026-09-11"])
+        view = _wait_view(self.manager, submitted["job_id"])
+        self.assertEqual(view["status"], "ready", view.get("error"))
+        selects = [s for s in self._hive_conn.executed if s.startswith("SELECT")]
+        self.assertEqual(selects, ["SELECT * FROM `db8`.`balance` WHERE `cdate` = '2026-09-11'"])
+        self.assertEqual(view["files"][0]["logical_date"], "2026-09-11")
+        # profile 只回逻辑模式
+        self.assertNotIn("etl_date", repr(service.hive_profile("db8", "balance")))
 
     def test_hive_time_partitioned_cdate_case_insensitive(self):
         service = self._hive_service(
@@ -293,8 +378,9 @@ class LoadExportServiceTests(unittest.TestCase):
         view = _wait_view(self.manager, submitted["job_id"])
         self.assertEqual(view["status"], "ready", view.get("error"))
         select_sql = [s for s in self._hive_conn.executed if s.startswith("SELECT")][0]
-        self.assertIn("WHERE `CDATE` IN ('2026-09-12')", select_sql)
+        self.assertIn("WHERE `CDATE` = '2026-09-12'", select_sql)
         self.assertEqual(view["files"][0]["name"], "balance__2026-09-12.parquet")
+        self.assertEqual(view["files"][0]["logical_date"], "2026-09-12")
 
     def test_hive_missing_partition_fails_with_explicit_dates(self):
         service = self._hive_service(

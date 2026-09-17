@@ -88,9 +88,13 @@ def parse_describe_rows(rows) -> dict:
 
 
 def resolve_time_partition_field(partition_columns, primary_hint: str) -> Optional[str]:
-    """在分区列中识别 etl_date/cdate（大小写不敏感）；并存时按平台配置选主字段。
+    """在分区列中识别 etl_date/cdate（大小写不敏感）。
 
     返回实际物理字段名（保留原大小写）；无时间分区返回 None。
+
+    两个候选字段并存时由平台配置 `hive.primary_time_partition` 选主字段——
+    这属于数据口径选择：配置缺失或无效时**明确失败（fail-closed）**，
+    绝不 warning 后猜测某个字段（会静默取错数据口径）。
     """
     by_lower = {c["name"].lower(): c["name"] for c in partition_columns or []}
     candidates = [f for f in TIME_PARTITION_FIELDS if f in by_lower]
@@ -98,11 +102,13 @@ def resolve_time_partition_field(partition_columns, primary_hint: str) -> Option
         return None
     if len(candidates) > 1:
         hint = (primary_hint or "").lower()
-        if hint in candidates:
-            return by_lower[hint]
-        logger.warning(
-            f"表同时存在 {candidates} 时间分区，配置主字段 {primary_hint!r} 无效，回退 {candidates[0]}"
-        )
+        if hint not in candidates:
+            raise LoadJobError(
+                f"表同时存在 {candidates} 两个时间分区，但配置 "
+                f"hive.primary_time_partition={primary_hint!r} 不是其中之一；"
+                "由平台配置指定主时间字段，拒绝按默认值猜测（避免取错数据口径）"
+            )
+        return by_lower[hint]
     return by_lower[candidates[0]]
 
 
@@ -124,19 +130,32 @@ def parse_partition_rows(rows, field: str) -> set:
 def build_hive_sql(database: str, table: str, partition_field: Optional[str], dates: List[str]) -> str:
     if not partition_field:
         return f"SELECT * FROM `{database}`.`{table}`"
+    if not dates:
+        raise LoadJobError("时间分区表导出必须指定至少一个逻辑日期")
     ordered = sorted(dates)
     values = ", ".join("'" + d + "'" for d in ordered)
     return f"SELECT * FROM `{database}`.`{table}` WHERE `{partition_field}` IN ({values})"
 
 
-def build_hive_file_name(table: str, partition_field: Optional[str], actual_dates: List[str]) -> str:
-    """时间分区表在文件名中表达实际逻辑日期；full_table 文件名绝不能带请求日期。"""
-    if not partition_field or not actual_dates:
+def build_partitioned_hive_sql(database: str, table: str, partition_field: str, date: str) -> str:
+    """单个 logical date → 单个物理分区谓词（等值，不用 IN）。"""
+    return f"SELECT * FROM `{database}`.`{table}` WHERE `{partition_field}` = '{date}'"
+
+
+def build_hive_file_name(table: str, partition_field: Optional[str], logical_dates: List[str]) -> str:
+    """时间分区表在文件名中表达实际逻辑日期；full_table 文件名绝不能带请求日期。
+
+    时间分区表按逻辑日期**逐日一个文件**（分区即文件），因此逻辑日期必须是
+    单一日期。
+    """
+    if not partition_field or not logical_dates:
         return f"{table}.parquet"
-    ordered = sorted(actual_dates)
-    if len(ordered) == 1:
-        return f"{table}__{ordered[0]}.parquet"
-    return f"{table}__{ordered[0]}__{ordered[-1]}.parquet"
+    if len(logical_dates) != 1:
+        raise LoadJobError(
+            "时间分区表导出必须按逻辑日期逐日产出文件（分区即文件），"
+            f"收到 {len(logical_dates)} 个日期"
+        )
+    return f"{table}__{logical_dates[0]}.parquet"
 
 
 def normalize_requested_dates(dates) -> List[str]:
@@ -213,9 +232,13 @@ class LoadExportService:
         described = self._hive_describe(database, table)
         if "error" in described:
             return described
-        field = resolve_time_partition_field(
-            described.get("partition_columns"), self._primary_time_partition()
-        )
+        try:
+            field = resolve_time_partition_field(
+                described.get("partition_columns"), self._primary_time_partition()
+            )
+        except LoadJobError as exc:
+            # 并存的物理时间字段无法按配置判定 → 明确失败，不返回猜测的 profile
+            return {"error": str(exc)}
         return {
             "database": database,
             "table": table,
@@ -333,42 +356,109 @@ class LoadExportService:
         partition_columns = described.get("partition_columns", [])
         field = resolve_time_partition_field(partition_columns, self._primary_time_partition())
 
-        actual_dates: List[str] = []
-        notice = None
-        if field is None:
-            # 无时间分区：忽略日期过滤，整表导出；明确告知全量语义
-            load_mode = "full_table"
-            notice = FULL_TABLE_NOTICE
-        else:
-            load_mode = "time_partitioned"
-            if not requested:
-                raise LoadJobError(
-                    f"表 {database}.{table} 是时间分区表，必须至少传一个逻辑日期（dates）"
-                )
-            available = self._show_partitions(database, table, field)
-            missing = [d for d in requested if d not in available]
-            if missing:
-                preview = ", ".join(missing[:20]) + ("..." if len(missing) > 20 else "")
-                raise LoadJobError(f"以下日期分区在表中不存在: {preview}")
-            actual_dates = list(requested)
-
-        sql = build_hive_sql(database, table, field, actual_dates)
-        file_name = build_hive_file_name(table, field, actual_dates)
-        out_path = ctx.work_dir / file_name
         declared = {
             c["name"]: c["type"]
             for c in described.get("columns", []) + partition_columns
         }
-        logger.info(f"Hive load 导出 ({load_mode}): {database}.{table} {sql}")
+        lowered = {k.lower(): v for k, v in declared.items()}
+
+        if field is None:
+            # 无时间分区：忽略日期过滤，整表导出为单个文件；明确告知全量语义。
+            # 文件名绝不带请求日期，避免伪快照语义。
+            load_mode = "full_table"
+            notice = FULL_TABLE_NOTICE
+            file_name = build_hive_file_name(table, None, [])
+            row_count, resolved = self._export_one(
+                ctx,
+                build_hive_sql(database, table, None, []),
+                file_name,
+                lowered,
+                label=f"full_table:{database}.{table}",
+            )
+            ctx.add_file(file_name)
+            ctx.set_result(
+                source={"type": "hive", "database": database, "table": table},
+                schema=[{"name": name, "type": str(t)} for name, t in resolved],
+                row_count=row_count,
+                source_version=None,
+                load_mode=load_mode,
+                time_partitioned=False,
+                requested_dates=requested,
+                actual_dates=[],
+                notice=notice,
+            )
+            return {}
+
+        # 时间分区表：分区即文件——每个 logical date 独立文件与独立分区身份，
+        # 这是 Taosha Dataset（以及后续 #17 分区级缓存复用）的物理基础。
+        load_mode = "time_partitioned"
+        if not requested:
+            raise LoadJobError(
+                f"表 {database}.{table} 是时间分区表，必须至少传一个逻辑日期（dates）"
+            )
+        available = self._show_partitions(database, table, field)
+        missing = [d for d in requested if d not in available]
+        if missing:
+            preview = ", ".join(missing[:20]) + ("..." if len(missing) > 20 else "")
+            raise LoadJobError(f"以下日期分区在表中不存在: {preview}")
+
+        schema = None
+        total_rows = 0
+        for index, date in enumerate(sorted(requested)):
+            ctx.check_alive()
+            file_name = build_hive_file_name(table, field, [date])
+            row_count, resolved = self._export_one(
+                ctx,
+                build_partitioned_hive_sql(database, table, field, date),
+                file_name,
+                lowered,
+                label=f"logical_date={date}",
+            )
+            if schema is None:
+                schema = resolved
+            elif [(n, str(t)) for n, t in resolved] != [(n, str(t)) for n, t in schema]:
+                raise LoadJobError(
+                    f"逻辑日期 {date} 的分区 schema 与首个分区不一致，拒绝合并为一个 Dataset"
+                )
+            # 文件描述符携带逻辑分区身份：Taosha 只消费 logical_date，
+            # 不感知底层是 etl_date 还是 cdate。
+            ctx.add_file(file_name, logical_date=date)
+            total_rows += row_count
+            logger.info(f"Hive load 分区完成 ({index + 1}/{len(requested)}): {table}__{date}")
+
+        ctx.set_result(
+            source={"type": "hive", "database": database, "table": table},
+            schema=[{"name": name, "type": str(t)} for name, t in (schema or [])],
+            row_count=total_rows,
+            source_version=None,
+            load_mode=load_mode,
+            time_partitioned=True,
+            requested_dates=requested,
+            actual_dates=sorted(requested),
+            notice=None,
+        )
+        return {}
+
+    def _export_one(
+        self,
+        ctx,
+        sql: str,
+        file_name: str,
+        declared_lower: dict,
+        *,
+        label: str,
+    ):
+        """导出一条 SQL 到一个 Parquet 文件（分批流式读，不整表进内存）。"""
+        out_path = ctx.work_dir / file_name
+        logger.info(f"Hive load 导出 ({label}): {sql}")
         with self._hive_connection() as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(sql)
                 names = [d[0] for d in cursor.description or []]
-                lowered = {k.lower(): v for k, v in declared.items()}
-                row_count, resolved = stream_to_parquet(
+                return stream_to_parquet(
                     cursor.fetchmany,
-                    [(n, lowered.get(str(n).lower())) for n in names],
+                    [(n, declared_lower.get(str(n).lower())) for n in names],
                     out_path,
                     batch_rows=self._batch_rows(),
                     should_stop=ctx.check_alive,
@@ -376,19 +466,6 @@ class LoadExportService:
                 )
             finally:
                 cursor.close()
-        ctx.add_file(file_name)
-        ctx.set_result(
-            source={"type": "hive", "database": database, "table": table},
-            schema=[{"name": name, "type": str(t)} for name, t in resolved],
-            row_count=row_count,
-            source_version=None,
-            load_mode=load_mode,
-            time_partitioned=field is not None,
-            requested_dates=requested,
-            actual_dates=actual_dates,
-            notice=notice,
-        )
-        return {}
 
     # ---------- 配置 ----------
 
