@@ -4,6 +4,19 @@
 server:
   request_timeout: 600
 
+# 内置 Datalayer Jupyter MCP Server（tools/jupyter_mcp.py，端点 /mcp/jupyter）
+# enabled=false 时不 import jupyter-mcp-server、不探测、不挂载，其余服务不受影响
+jupyter:
+  enabled: false
+  # Jupyter Server 地址（http/https）
+  url: "http://jupyter:8888"
+  # 为空视为无鉴权
+  token: ""
+  # 空=由调用方每次传 kernel_id；填了即固定复用该 kernel（取自 /api/sessions 的 kernel.id）
+  kernel_id: ""
+  # 单次执行超时（秒）
+  execution_timeout: 30
+
 # Hive 连接配置
 hive:
   host: "localhost"
