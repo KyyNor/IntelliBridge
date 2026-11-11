@@ -22,6 +22,7 @@ from utils.hive_pool import hive_pool
 from utils.logger import logger
 from utils.middleware import RequestTimeoutMiddleware
 from utils.mysql_pool import mysql_pool
+from tools.jupyter_mcp import jupyter_routes, jupyter_lifespan
 
 memory_mcp_app = memory_mcp.http_app(path='/mcp/memory')
 hive_mcp_app = hive_mcp.http_app(path='/mcp/hive')
@@ -97,6 +98,7 @@ _mcp_lifespan = combine_lifespans(
     fr_mcp_app.lifespan,
     fine_cpt_mcp_app.lifespan,
     ds_mcp_app.lifespan,
+    jupyter_lifespan,
 )
 
 
@@ -136,6 +138,7 @@ combined_app = FastAPI(
         *fr_mcp_app.routes,
         *fine_cpt_mcp_app.routes,
         *ds_mcp_app.routes,
+        *jupyter_routes,
     ],
     lifespan=combined_lifespan,
 )
