@@ -23,6 +23,7 @@ from utils.logger import logger
 from utils.middleware import RequestTimeoutMiddleware
 from utils.mysql_pool import mysql_pool
 from tools.jupyter_mcp import jupyter_routes, jupyter_lifespan
+from tools.marimo_mcp import marimo_routes, marimo_lifespan, marimo_timeout_overrides
 
 memory_mcp_app = memory_mcp.http_app(path='/mcp/memory')
 hive_mcp_app = hive_mcp.http_app(path='/mcp/hive')
@@ -99,6 +100,7 @@ _mcp_lifespan = combine_lifespans(
     fine_cpt_mcp_app.lifespan,
     ds_mcp_app.lifespan,
     jupyter_lifespan,
+    marimo_lifespan,
 )
 
 
@@ -139,6 +141,7 @@ combined_app = FastAPI(
         *fine_cpt_mcp_app.routes,
         *ds_mcp_app.routes,
         *jupyter_routes,
+        *marimo_routes,
     ],
     lifespan=combined_lifespan,
 )
@@ -153,6 +156,7 @@ combined_app.add_middleware(
 combined_app.add_middleware(
     RequestTimeoutMiddleware,
     timeout_seconds=float(config.get("server.request_timeout", 300.0)),
+    path_timeouts=marimo_timeout_overrides,
 )
 
 async def main():
