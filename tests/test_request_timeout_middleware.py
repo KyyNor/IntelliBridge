@@ -6,6 +6,32 @@ from utils.middleware import RequestTimeoutMiddleware
 
 
 class RequestTimeoutMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def test_marimo_budget_does_not_change_other_routes(self):
+        async def slow_app(scope, receive, send):
+            self.assertGreater(get_remaining_timeout(), 0.03)
+            await asyncio.sleep(0.03)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        async def unrelated_app(scope, receive, send):
+            await asyncio.sleep(0.03)
+
+        for path in ("/mcp/marimo", "/mcp/marimo/"):
+            messages = []
+
+            async def send(message):
+                messages.append(message)
+
+            overrides = {"/mcp/marimo": 0.2, "/mcp/marimo/": 0.2}
+            middleware = RequestTimeoutMiddleware(slow_app, 0.01, overrides)
+            await middleware({"type": "http", "path": path}, lambda: None, send)
+            self.assertEqual(messages[0]["status"], 200)
+            for other_path in ("/api/test", "/mcp/marimo-extra"):
+                messages.clear()
+                middleware = RequestTimeoutMiddleware(unrelated_app, 0.01, overrides)
+                await middleware({"type": "http", "path": other_path}, lambda: None, send)
+                self.assertEqual(messages[0]["status"], 504)
+
     async def test_slow_http_request_gets_504(self):
         async def slow_app(scope, receive, send):
             await asyncio.sleep(0.05)
