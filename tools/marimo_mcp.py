@@ -1,8 +1,15 @@
-"""Expose a separately running marimo MCP server through IntelliBridge."""
+"""Expose marimo code mode with a local MCP tool catalogue."""
 
+import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
+from mcp import ClientSession, types
+from mcp.client.streamable_http import streamable_http_client
+from mcp.server.lowlevel import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from pydantic import (
     AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr, ValidationError, ValidationInfo,
     field_validator,
@@ -36,22 +43,79 @@ class MarimoSettings(BaseModel):
         return value
 
 
-def create_marimo_app(settings: MarimoSettings):
-    """Build a lazy proxy; creating it does not connect to marimo."""
-    from fastmcp.client.transports import StreamableHttpTransport
-    from fastmcp.server import create_proxy
-    from fastmcp.server.providers.proxy import ProxyClient
+class MarimoApp:
+    def __init__(self, session_manager: StreamableHTTPSessionManager):
+        self.session_manager = session_manager
+
+    async def __call__(self, scope, receive, send):
+        await self.session_manager.handle_request(scope, receive, send)
+
+    @asynccontextmanager
+    async def lifespan(self, app):
+        async with self.session_manager.run():
+            yield
+
+
+def create_marimo_app(settings: MarimoSettings) -> MarimoApp:
+    """Serve definitions from marimo 0.25.2 code mode and forward tool calls."""
+    if settings.url is None:
+        raise ValueError("Set marimo.url to the code-mode MCP endpoint")
+
+    catalogue_path = Path(__file__).with_name("marimo_code_tools.json")
+    catalogue = types.ListToolsResult.model_validate_json(catalogue_path.read_bytes())
+    tool_names = {tool.name for tool in catalogue.tools}
+    server = Server("marimo")
 
     token = settings.token.get_secret_value()
-    # FastMCP 3.1 forwards inbound Authorization by default. Always override it,
-    # including for anonymous upstreams, so client credentials stay on this hop.
-    transport = StreamableHttpTransport(
-        str(settings.url),
-        headers={"Authorization": f"Bearer {token}" if token else ""},
-    )
-    backend = ProxyClient(transport, timeout=settings.timeout, init_timeout=10)
-    proxy = create_proxy(backend, name="marimo")
-    return proxy.http_app(path=MARIMO_PATH, stateless_http=True)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    timeout = httpx.Timeout(settings.timeout, connect=30.0)
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        return catalogue.tools
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
+        if name not in tool_names:
+            raise ValueError(f"Unknown marimo code-mode tool: {name}")
+
+        context = server.request_context
+        progress_token = context.meta.progressToken if context.meta else None
+
+        async def forward_progress(progress: float, total: float | None, message: str | None):
+            await context.session.send_progress_notification(
+                progress_token, progress, total, message, related_request_id=context.request_id,
+            )
+
+        request = types.ClientRequest(types.CallToolRequest(
+            params=types.CallToolRequestParams(name=name, arguments=arguments, _meta=context.meta),
+        ))
+        upstream_status = None
+
+        async def record_http_error(response: httpx.Response):
+            nonlocal upstream_status
+            if response.is_error:
+                upstream_status = response.status_code
+
+        try:
+            async with httpx.AsyncClient(headers=headers, timeout=timeout,
+                                         event_hooks={"response": [record_http_error]}) as http:
+                async with streamable_http_client(str(settings.url), http_client=http) as (reader, writer, _):
+                    async with ClientSession(reader, writer) as client:
+                        async with asyncio.timeout(10):
+                            await client.initialize()
+                        # ClientSession.call_tool may refresh the output schema with tools/list.
+                        return await client.send_request(
+                            request, types.CallToolResult,
+                            progress_callback=forward_progress if progress_token is not None else None,
+                        )
+        except Exception as exc:
+            if upstream_status is not None:
+                raise RuntimeError(f"marimo upstream returned HTTP {upstream_status}") from None
+            logger.warning("Marimo MCP 上游调用 {} 失败（{}）", name, type(exc).__name__)
+            raise RuntimeError("marimo upstream MCP request failed") from None
+
+    return MarimoApp(StreamableHTTPSessionManager(server, stateless=True))
 
 
 @asynccontextmanager
@@ -74,8 +138,6 @@ def _configure():
         logger.warning("Marimo MCP 未挂载：初始化失败（{}）", type(exc).__name__)
         return [], _noop_lifespan, {}
     logger.info("Marimo MCP 已挂载于 {}，请求期限 {}s", MARIMO_PATH, settings.timeout)
-    # An ASGI Route preserves FastMCP's HTTP context middleware without
-    # stripping the path or introducing a second /mcp prefix through Mount.
     return [Route(MARIMO_PATH, endpoint=app)], app.lifespan, {
         MARIMO_PATH: settings.timeout,
         MARIMO_PATH + "/": settings.timeout,

@@ -1,4 +1,4 @@
-"""Verify the proxy against a running marimo without starting database services.
+"""Verify the proxy against marimo code mode without starting database services.
 
 Run from the repository root with IntelliBridge's Python environment:
     python scripts/verify_marimo_proxy.py --url http://marimo:2718/mcp/server
@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 from starlette.applications import Starlette
 from starlette.routing import Route
 import uvicorn
@@ -46,19 +47,27 @@ async def verify(args):
                 await asyncio.sleep(0.01)
         async with Client(address) as client:
             tools = await client.list_tools()
-            names = [tool.name for tool in tools]
-            for name in ("get_active_notebooks", "get_cell_outputs", "get_notebook_errors"):
-                assert name in names, names
-            result = await client.call_tool("get_active_notebooks", {"args": {}})
-            assert not result.is_error, result
-            assert result.structured_content["status"] == "success", result
+            assert {tool.name for tool in tools} == {"list_sessions", "execute_code"}
+
+            token = settings.token.get_secret_value()
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            async with Client(StreamableHttpTransport(str(settings.url), headers=headers)) as upstream:
+                upstream_tools = await upstream.list_tools()
+            assert {tool.name: tool.model_dump() for tool in tools} == {
+                tool.name: tool.model_dump() for tool in upstream_tools
+            }, "The upstream tool definitions differ from the local marimo code-mode catalogue"
+
+            result = await client.call_tool_mcp("list_sessions", {})
+            assert not result.isError, result
+            assert isinstance(result.structuredContent["sessions"], list)
         evidence = {
-            "status": "PASS", "endpoint": MARIMO_PATH, "tools": names,
-            "upstream_auth_configured": bool(settings.token.get_secret_value()),
+            "status": "PASS", "endpoint": MARIMO_PATH, "tools": [tool.name for tool in tools],
+            "upstream_auth_configured": bool(token),
             "fastmcp": importlib.metadata.version("fastmcp"),
             "mcp": importlib.metadata.version("mcp"),
-            "get_active_notebooks": result.structured_content,
-            "scope": "Real marimo through proxy routes/lifespan/deadline middleware; database services not started",
+            "tool_definitions_match_upstream": True,
+            "session_count": len(result.structuredContent["sessions"]),
+            "scope": "Real marimo code-mode tool definitions and list_sessions through the proxy",
         }
         args.output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
         print(json.dumps(evidence, ensure_ascii=False))

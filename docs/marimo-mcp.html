@@ -1,11 +1,11 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>通过 IntelliBridge 连接 marimo MCP</title>
 <style>body{max-width:900px;margin:40px auto;padding:0 22px;font:16px/1.8 system-ui,sans-serif;color:#26323d;background:#fff}h1{font-size:29px;line-height:1.4}h2{margin-top:30px;font-size:21px}a{color:#076a85}code{font:14px ui-monospace,monospace;overflow-wrap:anywhere}pre,aside{padding:18px;border-radius:10px;background:#eef4f7;white-space:pre-wrap}li{margin:8px 0}</style>
 <h1>通过 IntelliBridge 连接 marimo MCP</h1>
-<p>模型客户端只连接 <code>http://INTELLIBRIDGE_HOST:49000/mcp/marimo</code>。IntelliBridge 连接独立运行的 marimo，将原生工具、参数结构与结果转发给客户端。IntelliBridge 必须能够访问 marimo，模型客户端无需访问 marimo 的内网地址。</p>
+<p>模型客户端连接 <code>http://INTELLIBRIDGE_HOST:49000/mcp/marimo</code>，使用 marimo 代码模式的 <code>list_sessions</code> 和 <code>execute_code</code>。IntelliBridge 在工具调用时连接独立运行的 marimo。</p>
 <h2>启动 marimo</h2>
 <p>在 marimo 自己的虚拟环境中启用 MCP，保留 token 鉴权。若 IntelliBridge 与 marimo 分机部署，将监听地址改为可达的内网地址。</p>
-<pre>marimo edit notebook.py --mcp --host 127.0.0.1 --port 2718</pre>
-<p>marimo 的上游 MCP 路径是 <code>/mcp/server</code>。若 marimo 在容器中，127.0.0.1 指该容器自身。反向代理部署时，按 marimo 文档配置 Host 校验；<code>421 Invalid Host Header</code> 应在上游部署处处理。</p>
+<pre>marimo edit notebook.py --mcp=code-mode --host 127.0.0.1 --port 2718</pre>
+<p>marimo 的上游 MCP 路径是 <code>/mcp/server</code>。若 IntelliBridge 在容器中，<code>127.0.0.1</code> 指 IntelliBridge 容器自身。收到 <code>421 Invalid Host Header</code> 时，检查上游 marimo 或反向代理的 Host 校验。</p>
 <h2>配置 IntelliBridge</h2>
 <p>修改 <code>config/config.yaml</code>，然后重启 IntelliBridge：</p>
 <pre>marimo:
@@ -14,7 +14,7 @@
   token: "填写上游 marimo token"
   timeout: 600</pre>
 <ul><li><code>enabled</code> 默认为 false。关闭时不挂载路由，也不连接上游。</li><li><code>url</code> 是完整 MCP 地址，只支持 HTTP/HTTPS。不允许把凭据、查询参数或片段放进 URL，token 使用单独字段。</li><li><code>token</code> 由 IntelliBridge 通过 Bearer 头发送给 marimo。客户端的 Authorization 不会替代上游 token。上游无鉴权时可留空。</li><li><code>timeout</code> 是正数秒，控制 marimo 路径的整次 HTTP 请求期限和上游 MCP 请求等待时间。它覆盖该路径上的 <code>server.request_timeout</code>，不改变其他路由的期限。上游 MCP initialize 的等待期限为 10 秒。</li></ul>
-<p>代理在请求到达时连接上游，marimo 暂时不可达不会阻止 IntelliBridge 启动。启用后的路由挂载日志只说明本地路由创建成功，不代表上游已经连通。错误配置会记录字段名并跳过挂载，其他服务继续启动。</p>
+<p><code>tools/list</code> 读取本地工具定义。启用后，即使 marimo 暂时不可达，客户端也能列出两个工具。<code>tools/call</code> 才会发起上游 MCP 握手。上游连接失败时，工具调用返回错误。</p>
 <h2>配置模型客户端</h2>
 <p>在支持 Streamable HTTP 的 MCP 客户端中配置以下地址。客户端与 IntelliBridge 之间的鉴权按现有入口配置，上游 marimo token 不需要交给模型客户端。</p>
 <pre>{
@@ -26,13 +26,16 @@
 }</pre>
 <p>不同客户端的配置格式不同，以上表示端点关系。若 IntelliBridge 前面还有网关，需要允许流式响应，并同步检查网关和客户端的请求期限。进度通知不会取消绝对期限。</p>
 <h2>能力边界</h2>
-<p>代理使用现有 FastMCP，不把 marimo 包装进 IntelliBridge 的 Python 环境。marimo 可独立使用 MCP SDK 2.x，IntelliBridge 保持当前 SDK 1.x 依赖。工具名不加前缀、不改参数，转发结构化结果、工具错误与进度通知。</p>
-<p>当前 marimo 原生工具可查询 notebook、运行状态、输出、错误、变量及依赖图。代理不会添加创建、编辑、执行或取消 cell 的工具。实际能力以当前上游的 tools/list 为准。</p>
+<p>本地清单来自 marimo 0.25.2 代码模式。代理向上游发送同名工具及其参数，保留 MCP 工具结果中的内容、结构化字段与错误标志，并转发上游提供的进度通知。</p>
+<ul>
+  <li><code>list_sessions()</code> 查询 marimo 当前的 notebook 会话。</li>
+  <li><code>execute_code(session_id, code)</code> 在指定会话的 kernel 中执行 Python。</li>
+</ul>
 <h2>验证接入</h2>
-<p>先通过模型客户端连接 IntelliBridge，列出原生工具。调用 <code>get_active_notebooks</code> 时，marimo 的参数结构为 <code>{"args": {}}</code>。没有打开的 notebook 会得到空列表，不代表代理失败。</p>
+<p>列出两个工具后，用 <code>{}</code> 调用 <code>list_sessions</code>。如果会话列表为空，先在 marimo 打开 notebook。使用返回的 <code>session_id</code> 调用 <code>execute_code</code>。</p>
 <p>也可以用仓库脚本验证代理模块和真实 marimo。需要 IntelliBridge 的 Python 环境，以及能够访问上游的网络。上游 token 通过环境变量 MARIMO_TOKEN 提供，脚本不输出 token。</p>
 <pre>python scripts/verify_marimo_proxy.py \
   --url http://MARIMO_HOST:2718/mcp/server \
   --output /tmp/marimo-proxy-verification.json</pre>
-<p>该脚本使用与 IntelliBridge 相同的代理路由、生命周期和期限中间件，验证真实 MCP 工具发现与调用，不启动 MySQL/Hive 等其他服务。完整部署还需通过实际的 IntelliBridge 地址和入口网关验证。</p>
+<p>脚本比对本地和上游的完整工具定义，并经代理调用 <code>list_sessions</code>。验证使用与 IntelliBridge 相同的代理路由、生命周期和期限中间件。完整部署需通过实际的 IntelliBridge 地址和入口网关验证。</p>
 </html>
