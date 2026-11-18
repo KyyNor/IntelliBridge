@@ -3,7 +3,10 @@
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from pydantic import (
+    AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr, ValidationError, ValidationInfo,
+    field_validator,
+)
 from starlette.routing import Route
 
 from utils.config import config
@@ -16,13 +19,17 @@ class MarimoSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:2718/mcp/server")
+    url: AnyHttpUrl | None = Field(default=None, validate_default=True)
     token: SecretStr = SecretStr("")
     timeout: float = Field(default=600, gt=0, allow_inf_nan=False)
 
     @field_validator("url")
     @classmethod
-    def reject_url_credentials(cls, value: AnyHttpUrl) -> AnyHttpUrl:
+    def validate_url(cls, value: AnyHttpUrl | None, info: ValidationInfo) -> AnyHttpUrl | None:
+        if value is None:
+            if info.data.get("enabled"):
+                raise ValueError("Set marimo.url when marimo is enabled")
+            return None
         parsed = urlsplit(str(value))
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("Use marimo.token for credentials; URL must not contain a query or fragment")

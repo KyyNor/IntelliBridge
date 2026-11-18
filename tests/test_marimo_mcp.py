@@ -1,6 +1,8 @@
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 import socket
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -9,10 +11,10 @@ from fastmcp.client.transports import StreamableHttpTransport
 from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-from starlette.routing import Route
 import uvicorn
 
-from tools.marimo_mcp import MARIMO_PATH, MarimoSettings, _configure, create_marimo_app
+from tools.marimo_mcp import MARIMO_PATH, MarimoSettings, _configure
+from utils.config import ConfigManager
 from utils.middleware import RequestTimeoutMiddleware
 
 
@@ -41,8 +43,9 @@ async def serve(app):
 
 class MarimoConfigurationTests(unittest.TestCase):
     def test_disabled_and_invalid_settings_leave_other_services_available(self):
-        for raw in ({"enabled": "false"}, {"enabled": True, "url": "bad"},
-                    {"enabled": True, "timeout": 0}):
+        for raw in ({}, {"enabled": "false"}, {"enabled": True}, {"enabled": True, "url": None},
+                    {"enabled": True, "url": "bad"},
+                    {"enabled": True, "url": "http://localhost/mcp", "timeout": 0}):
             with self.subTest(raw=raw), patch("tools.marimo_mcp.config.get", return_value=raw):
                 routes, _, timeouts = _configure()
                 self.assertEqual(routes, [])
@@ -68,6 +71,7 @@ class MarimoConfigurationTests(unittest.TestCase):
 class MarimoForwardingTests(unittest.IsolatedAsyncioTestCase):
     async def test_native_tools_progress_errors_and_upstream_credentials(self):
         upstream = FastMCP("upstream")
+        config_path = Path(self.enterContext(TemporaryDirectory())) / "config.yaml"
 
         @upstream.tool
         async def native_echo(text: str, ctx: Context) -> dict:
@@ -93,14 +97,20 @@ class MarimoForwardingTests(unittest.IsolatedAsyncioTestCase):
                     await upstream_app(scope, receive, send)
 
                 # Recreate each MCP app because its session manager has one lifespan.
-                upstream_app = upstream.http_app(path="/mcp/server", stateless_http=True)
+                upstream_path = "/test-upstream/mcp"
+                upstream_app = upstream.http_app(path=upstream_path, stateless_http=True)
                 async with serve(record_headers) as upstream_url:
-                    settings = MarimoSettings(enabled=True, url=upstream_url + "/mcp/server",
-                                              token=token, timeout=2)
-                    proxy = create_marimo_app(settings)
-                    combined = Starlette(routes=[Route(MARIMO_PATH, proxy)], lifespan=proxy.lifespan)
+                    ConfigManager(config_path).save_config({"marimo": {
+                        "enabled": True,
+                        "url": upstream_url + upstream_path,
+                        "token": token,
+                        "timeout": 2,
+                    }})
+                    with patch("tools.marimo_mcp.config", ConfigManager(config_path)):
+                        routes, lifespan, timeouts = _configure()
+                    combined = Starlette(routes=routes, lifespan=lifespan)
                     combined.add_middleware(RequestTimeoutMiddleware, timeout_seconds=0.01,
-                                            path_timeouts={MARIMO_PATH: settings.timeout})
+                                            path_timeouts=timeouts)
                     async with serve(combined) as proxy_url:
                         transport = StreamableHttpTransport(proxy_url + MARIMO_PATH,
                             headers={"Authorization": "Bearer client-only-token"})

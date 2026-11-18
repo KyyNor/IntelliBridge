@@ -21,8 +21,8 @@ jupyter:
 # enabled=false 时不连接上游、不挂载；marimo 安装在独立环境中
 marimo:
   enabled: false
-  # 完整 MCP 端点地址，不要只填 marimo 首页；容器内 127.0.0.1 指容器自身
-  url: "http://127.0.0.1:2718/mcp/server"
+  # 启用时填写完整 MCP 端点，例如 http://marimo:2718/mcp/server
+  url: null
   # 上游 marimo 的 token；仅 IntelliBridge 持有，空串表示上游无鉴权
   token: ""
   # 代理请求及工具调用期限（秒），独立于 server.request_timeout
