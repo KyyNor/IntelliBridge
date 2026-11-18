@@ -26,7 +26,7 @@
 }</pre>
 <p>不同客户端的配置格式不同，以上表示端点关系。若 IntelliBridge 前面还有网关，需要允许流式响应，并同步检查网关和客户端的请求期限。进度通知不会取消绝对期限。</p>
 <h2>能力边界</h2>
-<p>本地清单来自 marimo 0.25.2 代码模式。代理向上游发送同名工具及其参数，保留 MCP 工具结果中的内容、结构化字段与错误标志，并转发上游提供的进度通知。</p>
+<p>两个工具在 IntelliBridge 中通过 FastMCP 注册，参数和结果结构以 marimo 0.25.2 代码模式为准。代理向上游发送同名工具及其参数，保留 MCP 工具结果中的内容、结构化字段与错误标志，并转发上游提供的进度通知。</p>
 <ul>
   <li><code>list_sessions()</code> 查询 marimo 当前的 notebook 会话。</li>
   <li><code>execute_code(session_id, code)</code> 在指定会话的 kernel 中执行 Python。</li>
@@ -37,5 +37,5 @@
 <pre>python scripts/verify_marimo_proxy.py \
   --url http://MARIMO_HOST:2718/mcp/server \
   --output /tmp/marimo-proxy-verification.json</pre>
-<p>脚本比对本地和上游的完整工具定义，并经代理调用 <code>list_sessions</code>。验证使用与 IntelliBridge 相同的代理路由、生命周期和期限中间件。完整部署需通过实际的 IntelliBridge 地址和入口网关验证。</p>
+<p>脚本比对本地和上游的工具名、参数和输出结构，并经代理调用 <code>list_sessions</code>。验证使用与 IntelliBridge 相同的代理路由、生命周期和期限中间件。完整部署需通过实际的 IntelliBridge 地址和入口网关验证。</p>
 </html>

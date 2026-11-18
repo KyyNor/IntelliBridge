@@ -2,16 +2,17 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
+from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
+from fastmcp.tools.tool import ToolResult
 import httpx
 from mcp import ClientSession, types
 from mcp.client.streamable_http import streamable_http_client
-from mcp.server.lowlevel import Server
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from pydantic import (
-    AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr, ValidationError, ValidationInfo,
+    AnyHttpUrl, BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, ValidationError, ValidationInfo,
     field_validator,
 )
 from starlette.routing import Route
@@ -43,52 +44,79 @@ class MarimoSettings(BaseModel):
         return value
 
 
-class MarimoApp:
-    def __init__(self, session_manager: StreamableHTTPSessionManager):
-        self.session_manager = session_manager
-
-    async def __call__(self, scope, receive, send):
-        await self.session_manager.handle_request(scope, receive, send)
-
-    @asynccontextmanager
-    async def lifespan(self, app):
-        async with self.session_manager.run():
-            yield
+class MarimoNotebookInfo(BaseModel):
+    name: str
+    path: str
+    session_id: str
 
 
-def create_marimo_app(settings: MarimoSettings) -> MarimoApp:
-    """Serve definitions from marimo 0.25.2 code mode and forward tool calls."""
+class ListSessionsResult(BaseModel):
+    sessions: list[MarimoNotebookInfo]
+
+
+class CodeExecutionResult(BaseModel):
+    success: bool
+    output: str | None = None
+    stdout: list[str]
+    stderr: list[str]
+    errors: list[str]
+    error: str | None = None
+    output_mimetype: Literal[
+        "application/json",
+        "application/vnd.marimo+error",
+        "application/vnd.marimo+traceback",
+        "application/vnd.marimo+mimebundle",
+        "application/vnd.vega.v5+json",
+        "application/vnd.vegalite.v5+json",
+        "application/vnd.vega.v6+json",
+        "application/vnd.vegalite.v6+json",
+        "application/vnd.jupyter.widget-view+json",
+        "image/png",
+        "image/svg+xml",
+        "image/tiff",
+        "image/avif",
+        "image/bmp",
+        "image/gif",
+        "image/jpeg",
+        "video/mp4",
+        "video/mpeg",
+        "text/html",
+        "text/plain",
+        "text/password",
+        "text/markdown",
+        "text/latex",
+        "text/csv",
+    ] | None = None
+
+
+class MarimoToolResult(ToolResult):
+    """Preserve the upstream MCP result, including its isError flag."""
+
+    _result: types.CallToolResult = PrivateAttr()
+
+    def __init__(self, result: types.CallToolResult):
+        super().__init__(content=result.content, structured_content=result.structuredContent, meta=result.meta)
+        self._result = result
+
+    def to_mcp_result(self) -> types.CallToolResult:
+        return self._result
+
+
+def create_marimo_app(settings: MarimoSettings):
     if settings.url is None:
         raise ValueError("Set marimo.url to the code-mode MCP endpoint")
 
-    catalogue_path = Path(__file__).with_name("marimo_code_tools.json")
-    catalogue = types.ListToolsResult.model_validate_json(catalogue_path.read_bytes())
-    tool_names = {tool.name for tool in catalogue.tools}
-    server = Server("marimo")
-
+    marimo_mcp = FastMCP("IntelliBridge marimo")
+    url = str(settings.url)
     token = settings.token.get_secret_value()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     timeout = httpx.Timeout(settings.timeout, connect=30.0)
 
-    @server.list_tools()
-    async def list_tools() -> list[types.Tool]:
-        return catalogue.tools
-
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
-        if name not in tool_names:
-            raise ValueError(f"Unknown marimo code-mode tool: {name}")
-
-        context = server.request_context
-        progress_token = context.meta.progressToken if context.meta else None
-
-        async def forward_progress(progress: float, total: float | None, message: str | None):
-            await context.session.send_progress_notification(
-                progress_token, progress, total, message, related_request_id=context.request_id,
-            )
-
+    async def call_upstream(name: str, arguments: dict[str, str], ctx: Context) -> MarimoToolResult:
+        context = ctx.request_context
+        meta = context.meta if context else None
         request = types.ClientRequest(types.CallToolRequest(
-            params=types.CallToolRequestParams(name=name, arguments=arguments, _meta=context.meta),
+            params=types.CallToolRequestParams(name=name, arguments=arguments, _meta=meta),
         ))
         upstream_status = None
 
@@ -100,22 +128,34 @@ def create_marimo_app(settings: MarimoSettings) -> MarimoApp:
         try:
             async with httpx.AsyncClient(headers=headers, timeout=timeout,
                                          event_hooks={"response": [record_http_error]}) as http:
-                async with streamable_http_client(str(settings.url), http_client=http) as (reader, writer, _):
+                async with streamable_http_client(url, http_client=http) as (reader, writer, _):
                     async with ClientSession(reader, writer) as client:
                         async with asyncio.timeout(10):
                             await client.initialize()
                         # ClientSession.call_tool may refresh the output schema with tools/list.
-                        return await client.send_request(
+                        result = await client.send_request(
                             request, types.CallToolResult,
-                            progress_callback=forward_progress if progress_token is not None else None,
+                            progress_callback=ctx.report_progress if meta and meta.progressToken is not None else None,
                         )
         except Exception as exc:
             if upstream_status is not None:
-                raise RuntimeError(f"marimo upstream returned HTTP {upstream_status}") from None
+                raise ToolError(f"marimo upstream returned HTTP {upstream_status}") from None
             logger.warning("Marimo MCP 上游调用 {} 失败（{}）", name, type(exc).__name__)
-            raise RuntimeError("marimo upstream MCP request failed") from None
+            raise ToolError("marimo upstream MCP request failed") from None
 
-    return MarimoApp(StreamableHTTPSessionManager(server, stateless=True))
+        return MarimoToolResult(result)
+
+    @marimo_mcp.tool(name="list_sessions", output_schema=ListSessionsResult.model_json_schema())
+    async def list_sessions(ctx: Context) -> ToolResult:
+        """List active marimo notebook sessions and their session IDs."""
+        return await call_upstream("list_sessions", {}, ctx)
+
+    @marimo_mcp.tool(name="execute_code", output_schema=CodeExecutionResult.model_json_schema())
+    async def execute_code(session_id: str, code: str, ctx: Context) -> ToolResult:
+        """Execute Python code in the specified marimo notebook's kernel scratchpad."""
+        return await call_upstream("execute_code", {"session_id": session_id, "code": code}, ctx)
+
+    return marimo_mcp.http_app(path=MARIMO_PATH, stateless_http=True)
 
 
 @asynccontextmanager

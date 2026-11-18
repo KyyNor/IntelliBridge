@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.utilities.json_schema import compress_schema, dereference_refs
 from starlette.applications import Starlette
 from starlette.routing import Route
 import uvicorn
@@ -52,10 +53,14 @@ async def verify(args):
             token = settings.token.get_secret_value()
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             async with Client(StreamableHttpTransport(str(settings.url), headers=headers)) as upstream:
-                upstream_tools = await upstream.list_tools()
-            assert {tool.name: tool.model_dump() for tool in tools} == {
-                tool.name: tool.model_dump() for tool in upstream_tools
-            }, "The upstream tool definitions differ from the local marimo code-mode catalogue"
+                upstream_tools = {tool.name: tool for tool in await upstream.list_tools()}
+            assert upstream_tools.keys() == {tool.name for tool in tools}, "The upstream must use marimo code mode"
+            for tool in tools:
+                upstream_tool = upstream_tools[tool.name]
+                expected_input = compress_schema(upstream_tool.inputSchema, prune_titles=True)
+                assert tool.inputSchema == {**expected_input, "additionalProperties": False}, tool.name
+                assert tool.outputSchema is not None and upstream_tool.outputSchema is not None, tool.name
+                assert dereference_refs(tool.outputSchema) == dereference_refs(upstream_tool.outputSchema), tool.name
 
             result = await client.call_tool_mcp("list_sessions", {})
             assert not result.isError, result
@@ -65,7 +70,7 @@ async def verify(args):
             "upstream_auth_configured": bool(token),
             "fastmcp": importlib.metadata.version("fastmcp"),
             "mcp": importlib.metadata.version("mcp"),
-            "tool_definitions_match_upstream": True,
+            "tool_schemas_match_upstream": True,
             "session_count": len(result.structuredContent["sessions"]),
             "scope": "Real marimo code-mode tool definitions and list_sessions through the proxy",
         }
